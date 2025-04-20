@@ -468,7 +468,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "stowage-9p"
+name = "stowage-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "futures",
+ "stowage-proto",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "stowage-proto"
 version = "0.1.0"
 dependencies = [
  "bytes",
@@ -476,20 +490,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
-]
-
-[[package]]
-name = "stowage-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "futures",
- "stowage-9p",
- "thiserror",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

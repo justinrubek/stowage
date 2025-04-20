@@ -11,7 +11,7 @@ tracing = { workspace = true }
 workspace = true
 
 [package]
-name = "stowage-9p"
+name = "stowage-proto"
 version = { workspace = true }
 edition = { workspace = true }
 license = { workspace = true }
