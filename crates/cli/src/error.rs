@@ -1,7 +1,7 @@
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    // #[error(transparent)]
-    // Anyhow(#[from] anyhow::Error),
+    #[error(transparent)]
+    StdIo(#[from] std::io::Error),
     #[error("Hello {0}")]
     Other(String),
 }

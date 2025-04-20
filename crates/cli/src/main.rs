@@ -1,5 +1,5 @@
 use crate::{
-    commands::{Commands, HelloCommands},
+    commands::{Commands, ServerCommands},
     error::Result,
 };
 use clap::Parser;
@@ -9,34 +9,45 @@ use std::{
     sync::{Arc, Mutex},
 };
 use stowage_proto::{Codec, Message, Qid};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::TcpListener,
+};
 use tokio_util::codec::Framed;
+use tracing::info;
 
 mod commands;
 mod error;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let args = commands::Args::parse();
     match args.command {
-        Commands::Hello(hello) => {
-            let cmd = hello.command;
+        Commands::Server(server) => {
+            let cmd = server.command;
             match cmd {
-                HelloCommands::World => {
-                    println!("Hello, world!");
-                }
-                HelloCommands::Name { name } => {
-                    println!("Hello, {name}!");
-                }
-                HelloCommands::Error => {
-                    Err(crate::error::Error::Other("error".into()))?;
+                ServerCommands::Start => {
+                    let listener = TcpListener::bind(server.addr).await?;
+                    info!("listening on: {}", server.addr);
+
+                    let fs = Arc::new(BasicFilesystem::new());
+
+                    loop {
+                        let (socket, addr) = listener.accept().await?;
+                        info!("new connection from: {addr}");
+
+                        let fs_clone = fs.clone();
+                        tokio::spawn(async move {
+                            let service = Plan9Service::new(socket, fs_clone);
+                            service.run().await;
+                        });
+                    }
                 }
             }
         }
     }
-
-    Ok(())
 }
 
 pub struct Plan9Service<T, F>

@@ -7,21 +7,21 @@ pub(crate) struct Args {
 
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum Commands {
-    Hello(Hello),
+    Server(ServerCommand),
 }
 
 #[derive(clap::Args, Debug)]
-pub(crate) struct Hello {
+pub(crate) struct ServerCommand {
     #[clap(subcommand)]
-    pub command: HelloCommands,
+    pub command: ServerCommands,
+
+    #[arg(default_value = "0.0.0.0:3000", long, short)]
+    pub addr: std::net::SocketAddr,
 }
 
+/// A command for running the API server
 #[derive(clap::Subcommand, Debug)]
-pub(crate) enum HelloCommands {
-    World,
-    Name {
-        #[arg()]
-        name: String,
-    },
-    Error,
+pub(crate) enum ServerCommands {
+    /// start the http server
+    Start,
 }
