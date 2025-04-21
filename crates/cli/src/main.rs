@@ -1,7 +1,7 @@
 use crate::{
     commands::{Commands, ServerCommands},
     error::Result,
-    fs::MemoryFilesystem,
+    handlers::Memory,
 };
 use clap::Parser;
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use tracing::info;
 
 mod commands;
 mod error;
-mod fs;
+mod handlers;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
                     let listener = TcpListener::bind(server.addr).await?;
                     info!("listening on: {}", server.addr);
 
-                    let fs = Arc::new(MemoryFilesystem::new());
+                    let fs = Arc::new(Memory::new());
 
                     loop {
                         let (socket, addr) = listener.accept().await?;

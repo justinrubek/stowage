@@ -872,3 +872,39 @@ impl TryFrom<u8> for MessageType {
         }
     }
 }
+
+impl Message {
+    pub fn get_tag(&self) -> u16 {
+        match self {
+            Message::Tversion { tag, .. }
+            | Message::Rversion { tag, .. }
+            | Message::Tauth { tag, .. }
+            | Message::Rauth { tag, .. }
+            | Message::Tattach { tag, .. }
+            | Message::Rattach { tag, .. }
+            | Message::Rerror { tag, .. }
+            | Message::Tflush { tag, .. }
+            | Message::Rflush { tag, .. }
+            | Message::Twalk { tag, .. }
+            | Message::Rwalk { tag, .. }
+            | Message::Topen { tag, .. }
+            | Message::Ropen { tag, .. }
+            | Message::Tcreate { tag, .. }
+            | Message::Rcreate { tag, .. }
+            | Message::Tread { tag, .. }
+            | Message::Rread { tag, .. }
+            | Message::Twrite { tag, .. }
+            | Message::Rwrite { tag, .. }
+            | Message::Tclunk { tag, .. }
+            | Message::Rclunk { tag, .. }
+            | Message::Tremove { tag, .. }
+            | Message::Rremove { tag, .. }
+            | Message::Tstat { tag, .. }
+            | Message::Rstat { tag, .. }
+            | Message::Twstat { tag, .. }
+            | Message::Rwstat { tag, .. }
+            | Message::Topenfd { tag, .. }
+            | Message::Ropenfd { tag, .. } => *tag,
+        }
+    }
+}
