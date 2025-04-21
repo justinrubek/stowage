@@ -472,11 +472,10 @@ name = "stowage-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
- "futures",
  "stowage-proto",
+ "stowage-service",
  "thiserror",
  "tokio",
- "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
@@ -490,6 +489,16 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "stowage-service"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "stowage-proto",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
