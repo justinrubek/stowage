@@ -473,10 +473,7 @@ impl MessageHandler for Memory {
                     } else {
                         // Path element not found
                         if wqids.is_empty() {
-                            return Message::Rerror {
-                                tag,
-                                ename: "Path not found".to_string(),
-                            };
+                            return Message::Rlerror { tag, ecode: 2 };
                         }
                         break;
                     }
