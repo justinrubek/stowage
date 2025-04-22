@@ -49,7 +49,7 @@ impl Encoder<Message> for Codec {
         let start_pos = dst.len();
 
         // add placeholder for size
-        dst.put_u32(0);
+        dst.put_u32_le(0);
 
         // encode the message
         item.encode(dst);
@@ -283,8 +283,8 @@ impl Message {
                 version,
             } => {
                 buf.put_u8(MessageType::Tversion as u8);
-                buf.put_u16(*tag);
-                buf.put_u32(*msize);
+                buf.put_u16_le(*tag);
+                buf.put_u32_le(*msize);
                 encode_string(buf, version);
             }
             Message::Rversion {
@@ -293,8 +293,8 @@ impl Message {
                 version,
             } => {
                 buf.put_u8(MessageType::Rversion as u8);
-                buf.put_u16(*tag);
-                buf.put_u32(*msize);
+                buf.put_u16_le(*tag);
+                buf.put_u32_le(*msize);
                 encode_string(buf, version);
             }
             Message::Tauth {
@@ -304,14 +304,14 @@ impl Message {
                 aname,
             } => {
                 buf.put_u8(MessageType::Tauth as u8);
-                buf.put_u16(*tag);
-                buf.put_u32(*afid);
+                buf.put_u16_le(*tag);
+                buf.put_u32_le(*afid);
                 encode_string(buf, uname);
                 encode_string(buf, aname);
             }
             Message::Rauth { tag, aqid } => {
                 buf.put_u8(MessageType::Rauth as u8);
-                buf.put_u16(*tag);
+                buf.put_u16_le(*tag);
                 encode_qid(buf, aqid);
             }
             Message::Tattach {
@@ -322,30 +322,30 @@ impl Message {
                 aname,
             } => {
                 buf.put_u8(MessageType::Tattach as u8);
-                buf.put_u16(*tag);
-                buf.put_u32(*fid);
-                buf.put_u32(*afid);
+                buf.put_u16_le(*tag);
+                buf.put_u32_le(*fid);
+                buf.put_u32_le(*afid);
                 encode_string(buf, uname);
                 encode_string(buf, aname);
             }
             Message::Rattach { tag, qid } => {
                 buf.put_u8(MessageType::Rattach as u8);
-                buf.put_u16(*tag);
+                buf.put_u16_le(*tag);
                 encode_qid(buf, qid);
             }
             Message::Rerror { tag, ename } => {
                 buf.put_u8(MessageType::Rerror as u8);
-                buf.put_u16(*tag);
+                buf.put_u16_le(*tag);
                 encode_string(buf, ename);
             }
             Message::Tflush { tag, oldtag } => {
                 buf.put_u8(MessageType::Tflush as u8);
-                buf.put_u16(*tag);
-                buf.put_u16(*oldtag);
+                buf.put_u16_le(*tag);
+                buf.put_u16_le(*oldtag);
             }
             Message::Rflush { tag } => {
                 buf.put_u8(MessageType::Rflush as u8);
-                buf.put_u16(*tag);
+                buf.put_u16_le(*tag);
             }
             Message::Twalk {
                 tag,
@@ -354,12 +354,12 @@ impl Message {
                 wnames,
             } => {
                 buf.put_u8(MessageType::Twalk as u8);
-                buf.put_u16(*tag);
-                buf.put_u32(*fid);
-                buf.put_u32(*newfid);
+                buf.put_u16_le(*tag);
+                buf.put_u32_le(*fid);
+                buf.put_u32_le(*newfid);
 
                 // Number of walk elements
-                buf.put_u16(wnames.len() as u16);
+                buf.put_u16_le(wnames.len() as u16);
 
                 // Encode each name
                 for name in wnames {
@@ -368,10 +368,10 @@ impl Message {
             }
             Message::Rwalk { tag, wqids } => {
                 buf.put_u8(MessageType::Rwalk as u8);
-                buf.put_u16(*tag);
+                buf.put_u16_le(*tag);
 
                 // Number of qids
-                buf.put_u16(wqids.len() as u16);
+                buf.put_u16_le(wqids.len() as u16);
 
                 // Encode each qid
                 for qid in wqids {
@@ -380,15 +380,15 @@ impl Message {
             }
             Message::Topen { tag, fid, mode } => {
                 buf.put_u8(MessageType::Topen as u8);
-                buf.put_u16(*tag);
-                buf.put_u32(*fid);
+                buf.put_u16_le(*tag);
+                buf.put_u32_le(*fid);
                 buf.put_u8(*mode);
             }
             Message::Ropen { tag, qid, iounit } => {
                 buf.put_u8(MessageType::Ropen as u8);
-                buf.put_u16(*tag);
+                buf.put_u16_le(*tag);
                 encode_qid(buf, qid);
-                buf.put_u32(*iounit);
+                buf.put_u32_le(*iounit);
             }
             Message::Tcreate {
                 tag,
@@ -398,17 +398,17 @@ impl Message {
                 mode,
             } => {
                 buf.put_u8(MessageType::Tcreate as u8);
-                buf.put_u16(*tag);
-                buf.put_u32(*fid);
+                buf.put_u16_le(*tag);
+                buf.put_u32_le(*fid);
                 encode_string(buf, name);
-                buf.put_u32(*perm);
+                buf.put_u32_le(*perm);
                 buf.put_u8(*mode);
             }
             Message::Rcreate { tag, qid, iounit } => {
                 buf.put_u8(MessageType::Rcreate as u8);
-                buf.put_u16(*tag);
+                buf.put_u16_le(*tag);
                 encode_qid(buf, qid);
-                buf.put_u32(*iounit);
+                buf.put_u32_le(*iounit);
             }
             Message::Tread {
                 tag,
@@ -417,15 +417,15 @@ impl Message {
                 count,
             } => {
                 buf.put_u8(MessageType::Tread as u8);
-                buf.put_u16(*tag);
-                buf.put_u32(*fid);
-                buf.put_u64(*offset);
-                buf.put_u32(*count);
+                buf.put_u16_le(*tag);
+                buf.put_u32_le(*fid);
+                buf.put_u64_le(*offset);
+                buf.put_u32_le(*count);
             }
             Message::Rread { tag, data } => {
                 buf.put_u8(MessageType::Rread as u8);
-                buf.put_u16(*tag);
-                buf.put_u32(data.len() as u32);
+                buf.put_u16_le(*tag);
+                buf.put_u32_le(data.len() as u32);
                 buf.put_slice(data);
             }
             Message::Twrite {
@@ -435,47 +435,47 @@ impl Message {
                 data,
             } => {
                 buf.put_u8(MessageType::Twrite as u8);
-                buf.put_u16(*tag);
-                buf.put_u32(*fid);
-                buf.put_u64(*offset);
-                buf.put_u32(data.len() as u32);
+                buf.put_u16_le(*tag);
+                buf.put_u32_le(*fid);
+                buf.put_u64_le(*offset);
+                buf.put_u32_le(data.len() as u32);
                 buf.put_slice(data);
             }
             Message::Rwrite { tag, count } => {
                 buf.put_u8(MessageType::Rwrite as u8);
-                buf.put_u16(*tag);
-                buf.put_u32(*count);
+                buf.put_u16_le(*tag);
+                buf.put_u32_le(*count);
             }
             Message::Tclunk { tag, fid } => {
                 buf.put_u8(MessageType::Tclunk as u8);
-                buf.put_u16(*tag);
-                buf.put_u32(*fid);
+                buf.put_u16_le(*tag);
+                buf.put_u32_le(*fid);
             }
             Message::Rclunk { tag } => {
                 buf.put_u8(MessageType::Rclunk as u8);
-                buf.put_u16(*tag);
+                buf.put_u16_le(*tag);
             }
             Message::Tremove { tag, fid } => {
                 buf.put_u8(MessageType::Tremove as u8);
-                buf.put_u16(*tag);
-                buf.put_u32(*fid);
+                buf.put_u16_le(*tag);
+                buf.put_u32_le(*fid);
             }
             Message::Rremove { tag } => {
                 buf.put_u8(MessageType::Rremove as u8);
-                buf.put_u16(*tag);
+                buf.put_u16_le(*tag);
             }
             Message::Tstat { tag, fid } => {
                 buf.put_u8(MessageType::Tstat as u8);
-                buf.put_u16(*tag);
-                buf.put_u32(*fid);
+                buf.put_u16_le(*tag);
+                buf.put_u32_le(*fid);
             }
             Message::Rstat { tag, stat } => {
                 buf.put_u8(MessageType::Rstat as u8);
-                buf.put_u16(*tag);
+                buf.put_u16_le(*tag);
 
                 // Reserve space for stat size
                 let stat_start = buf.len();
-                buf.put_u16(0);
+                buf.put_u16_le(0);
 
                 // Encode stat structure
                 encode_stat(buf, stat);
@@ -487,12 +487,12 @@ impl Message {
             }
             Message::Twstat { tag, fid, stat } => {
                 buf.put_u8(MessageType::Twstat as u8);
-                buf.put_u16(*tag);
-                buf.put_u32(*fid);
+                buf.put_u16_le(*tag);
+                buf.put_u32_le(*fid);
 
                 // Reserve space for stat size
                 let stat_start = buf.len();
-                buf.put_u16(0);
+                buf.put_u16_le(0);
 
                 // Encode stat structure
                 encode_stat(buf, stat);
@@ -504,12 +504,12 @@ impl Message {
             }
             Message::Rwstat { tag } => {
                 buf.put_u8(MessageType::Rwstat as u8);
-                buf.put_u16(*tag);
+                buf.put_u16_le(*tag);
             }
             Message::Topenfd { tag, fid, mode } => {
                 buf.put_u8(MessageType::Topenfd as u8);
-                buf.put_u16(*tag);
-                buf.put_u32(*fid);
+                buf.put_u16_le(*tag);
+                buf.put_u32_le(*fid);
                 buf.put_u8(*mode);
             }
             Message::Ropenfd {
@@ -519,10 +519,10 @@ impl Message {
                 fd,
             } => {
                 buf.put_u8(MessageType::Ropenfd as u8);
-                buf.put_u16(*tag);
+                buf.put_u16_le(*tag);
                 encode_qid(buf, qid);
-                buf.put_u32(*iounit);
-                buf.put_u32(*fd);
+                buf.put_u32_le(*iounit);
+                buf.put_u32_le(*fd);
             }
         }
     }
@@ -533,11 +533,11 @@ impl Message {
         }
 
         let typ = buf.get_u8();
-        let tag = buf.get_u16();
+        let tag = buf.get_u16_le();
 
         match MessageType::try_from(typ) {
             Ok(MessageType::Tversion) => {
-                let msize = buf.get_u32();
+                let msize = buf.get_u32_le();
                 let version = decode_string(buf)?;
                 Ok(Message::Tversion {
                     tag,
@@ -546,7 +546,7 @@ impl Message {
                 })
             }
             Ok(MessageType::Rversion) => {
-                let msize = buf.get_u32();
+                let msize = buf.get_u32_le();
                 let version = decode_string(buf)?;
                 Ok(Message::Rversion {
                     tag,
@@ -555,7 +555,7 @@ impl Message {
                 })
             }
             Ok(MessageType::Tauth) => {
-                let afid = buf.get_u32();
+                let afid = buf.get_u32_le();
                 let uname = decode_string(buf)?;
                 let aname = decode_string(buf)?;
                 Ok(Message::Tauth {
@@ -570,8 +570,8 @@ impl Message {
                 Ok(Message::Rauth { tag, aqid })
             }
             Ok(MessageType::Tattach) => {
-                let fid = buf.get_u32();
-                let afid = buf.get_u32();
+                let fid = buf.get_u32_le();
+                let afid = buf.get_u32_le();
                 let uname = decode_string(buf)?;
                 let aname = decode_string(buf)?;
                 Ok(Message::Tattach {
@@ -591,14 +591,14 @@ impl Message {
                 Ok(Message::Rerror { tag, ename })
             }
             Ok(MessageType::Tflush) => {
-                let oldtag = buf.get_u16();
+                let oldtag = buf.get_u16_le();
                 Ok(Message::Tflush { tag, oldtag })
             }
             Ok(MessageType::Rflush) => Ok(Message::Rflush { tag }),
             Ok(MessageType::Twalk) => {
-                let fid = buf.get_u32();
-                let newfid = buf.get_u32();
-                let nwname = buf.get_u16() as usize;
+                let fid = buf.get_u32_le();
+                let newfid = buf.get_u32_le();
+                let nwname = buf.get_u16_le() as usize;
 
                 let mut wnames = Vec::with_capacity(nwname);
                 for _ in 0..nwname {
@@ -613,7 +613,7 @@ impl Message {
                 })
             }
             Ok(MessageType::Rwalk) => {
-                let nwqid = buf.get_u16() as usize;
+                let nwqid = buf.get_u16_le() as usize;
 
                 let mut wqids = Vec::with_capacity(nwqid);
                 for _ in 0..nwqid {
@@ -623,19 +623,19 @@ impl Message {
                 Ok(Message::Rwalk { tag, wqids })
             }
             Ok(MessageType::Topen) => {
-                let fid = buf.get_u32();
+                let fid = buf.get_u32_le();
                 let mode = buf.get_u8();
                 Ok(Message::Topen { tag, fid, mode })
             }
             Ok(MessageType::Ropen) => {
                 let qid = decode_qid(buf)?;
-                let iounit = buf.get_u32();
+                let iounit = buf.get_u32_le();
                 Ok(Message::Ropen { tag, qid, iounit })
             }
             Ok(MessageType::Tcreate) => {
-                let fid = buf.get_u32();
+                let fid = buf.get_u32_le();
                 let name = decode_string(buf)?;
-                let perm = buf.get_u32();
+                let perm = buf.get_u32_le();
                 let mode = buf.get_u8();
                 Ok(Message::Tcreate {
                     tag,
@@ -647,13 +647,13 @@ impl Message {
             }
             Ok(MessageType::Rcreate) => {
                 let qid = decode_qid(buf)?;
-                let iounit = buf.get_u32();
+                let iounit = buf.get_u32_le();
                 Ok(Message::Rcreate { tag, qid, iounit })
             }
             Ok(MessageType::Tread) => {
-                let fid = buf.get_u32();
-                let offset = buf.get_u64();
-                let count = buf.get_u32();
+                let fid = buf.get_u32_le();
+                let offset = buf.get_u64_le();
+                let count = buf.get_u32_le();
                 Ok(Message::Tread {
                     tag,
                     fid,
@@ -662,7 +662,7 @@ impl Message {
                 })
             }
             Ok(MessageType::Rread) => {
-                let count = buf.get_u32() as usize;
+                let count = buf.get_u32_le() as usize;
                 if buf.len() < count {
                     return Err(Error::BufferTooShort);
                 }
@@ -671,9 +671,9 @@ impl Message {
                 Ok(Message::Rread { tag, data })
             }
             Ok(MessageType::Twrite) => {
-                let fid = buf.get_u32();
-                let offset = buf.get_u64();
-                let count = buf.get_u32() as usize;
+                let fid = buf.get_u32_le();
+                let offset = buf.get_u64_le();
+                let count = buf.get_u32_le() as usize;
 
                 if buf.len() < count {
                     return Err(Error::BufferTooShort);
@@ -688,46 +688,46 @@ impl Message {
                 })
             }
             Ok(MessageType::Rwrite) => {
-                let count = buf.get_u32();
+                let count = buf.get_u32_le();
                 Ok(Message::Rwrite { tag, count })
             }
             Ok(MessageType::Tclunk) => {
-                let fid = buf.get_u32();
+                let fid = buf.get_u32_le();
                 Ok(Message::Tclunk { tag, fid })
             }
             Ok(MessageType::Rclunk) => Ok(Message::Rclunk { tag }),
             Ok(MessageType::Tremove) => {
-                let fid = buf.get_u32();
+                let fid = buf.get_u32_le();
                 Ok(Message::Tremove { tag, fid })
             }
             Ok(MessageType::Rremove) => Ok(Message::Rremove { tag }),
             Ok(MessageType::Tstat) => {
-                let fid = buf.get_u32();
+                let fid = buf.get_u32_le();
                 Ok(Message::Tstat { tag, fid })
             }
             Ok(MessageType::Rstat) => {
                 // Skip the stat size field since we decode the entire structure
-                let _stat_size = buf.get_u16();
+                let _stat_size = buf.get_u16_le();
                 let stat = decode_stat(buf)?;
                 Ok(Message::Rstat { tag, stat })
             }
             Ok(MessageType::Twstat) => {
-                let fid = buf.get_u32();
+                let fid = buf.get_u32_le();
                 // Skip the stat size field
-                let _stat_size = buf.get_u16();
+                let _stat_size = buf.get_u16_le();
                 let stat = decode_stat(buf)?;
                 Ok(Message::Twstat { tag, fid, stat })
             }
             Ok(MessageType::Rwstat) => Ok(Message::Rwstat { tag }),
             Ok(MessageType::Topenfd) => {
-                let fid = buf.get_u32();
+                let fid = buf.get_u32_le();
                 let mode = buf.get_u8();
                 Ok(Message::Topenfd { tag, fid, mode })
             }
             Ok(MessageType::Ropenfd) => {
                 let qid = decode_qid(buf)?;
-                let iounit = buf.get_u32();
-                let fd = buf.get_u32();
+                let iounit = buf.get_u32_le();
+                let fd = buf.get_u32_le();
                 Ok(Message::Ropenfd {
                     tag,
                     qid,
@@ -744,7 +744,7 @@ impl Message {
 
 fn encode_string(buf: &mut BytesMut, s: &str) {
     let bytes = s.as_bytes();
-    buf.put_u16(bytes.len() as u16);
+    buf.put_u16_le(bytes.len() as u16);
     buf.put_slice(bytes);
 }
 
@@ -753,8 +753,10 @@ fn decode_string(buf: &mut BytesMut) -> Result<String> {
         return Err(Error::BufferTooShort);
     }
 
-    let len = buf.get_u16() as usize;
+    let len = buf.get_u16_le() as usize;
     if buf.len() < len {
+        println!("error here");
+        // TODO: fix the decoding logic either here or elsewhere to correctly implement the spec
         return Err(Error::BufferTooShort);
     }
 
@@ -764,8 +766,8 @@ fn decode_string(buf: &mut BytesMut) -> Result<String> {
 
 fn encode_qid(buf: &mut BytesMut, qid: &Qid) {
     buf.put_u8(qid.qtype);
-    buf.put_u32(qid.version);
-    buf.put_u64(qid.path);
+    buf.put_u32_le(qid.version);
+    buf.put_u64_le(qid.path);
 }
 
 fn decode_qid(buf: &mut BytesMut) -> Result<Qid> {
@@ -775,8 +777,8 @@ fn decode_qid(buf: &mut BytesMut) -> Result<Qid> {
     }
 
     let qtype = buf.get_u8();
-    let version = buf.get_u32();
-    let path = buf.get_u64();
+    let version = buf.get_u32_le();
+    let path = buf.get_u64_le();
 
     Ok(Qid {
         qtype,
@@ -786,13 +788,13 @@ fn decode_qid(buf: &mut BytesMut) -> Result<Qid> {
 }
 
 fn encode_stat(buf: &mut BytesMut, stat: &Stat) {
-    buf.put_u16(stat.qtype);
-    buf.put_u32(stat.dev);
+    buf.put_u16_le(stat.qtype);
+    buf.put_u32_le(stat.dev);
     encode_qid(buf, &stat.qid);
-    buf.put_u32(stat.mode);
-    buf.put_u32(stat.atime);
-    buf.put_u32(stat.mtime);
-    buf.put_u64(stat.length);
+    buf.put_u32_le(stat.mode);
+    buf.put_u32_le(stat.atime);
+    buf.put_u32_le(stat.mtime);
+    buf.put_u64_le(stat.length);
     encode_string(buf, &stat.name);
     encode_string(buf, &stat.uid);
     encode_string(buf, &stat.gid);
@@ -805,13 +807,13 @@ fn decode_stat(buf: &mut BytesMut) -> Result<Stat> {
         return Err(Error::BufferTooShort);
     }
 
-    let qtype = buf.get_u16();
-    let dev = buf.get_u32();
+    let qtype = buf.get_u16_le();
+    let dev = buf.get_u32_le();
     let qid = decode_qid(buf)?;
-    let mode = buf.get_u32();
-    let atime = buf.get_u32();
-    let mtime = buf.get_u32();
-    let length = buf.get_u64();
+    let mode = buf.get_u32_le();
+    let atime = buf.get_u32_le();
+    let mtime = buf.get_u32_le();
+    let length = buf.get_u64_le();
     let name = decode_string(buf)?;
     let uid = decode_string(buf)?;
     let gid = decode_string(buf)?;

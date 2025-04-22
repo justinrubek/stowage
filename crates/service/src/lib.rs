@@ -36,7 +36,9 @@ where
                     let response = self.handler.handle_message(request).await;
                     self.connection.send(response).await?;
                 }
-                Err(e) => return Err(e),
+                Err(e) => {
+                    return Err(e);
+                }
             }
         }
 
