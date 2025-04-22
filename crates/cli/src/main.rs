@@ -7,7 +7,7 @@ use clap::Parser;
 use std::sync::Arc;
 use stowage_service::Plan9;
 use tokio::net::TcpListener;
-use tracing::info;
+use tracing::{error, info};
 
 mod commands;
 mod error;
@@ -35,7 +35,9 @@ async fn main() -> Result<()> {
                         let fs_clone = fs.clone();
                         tokio::spawn(async move {
                             let service = Plan9::new(socket, fs_clone);
-                            service.run().await.expect("server failed");
+                            if let Err(err) = service.run().await {
+                                error!("Connection error from {addr}: {err}");
+                            }
                         });
                     }
                 }

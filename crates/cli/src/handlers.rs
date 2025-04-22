@@ -1,10 +1,11 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use stowage_proto::{Message, Qid, Stat};
 use stowage_service::MessageHandler;
+use tracing::info;
 
 #[derive(Debug, Clone)]
 enum FsNode {
@@ -13,58 +14,166 @@ enum FsNode {
         content: Vec<u8>,
         qid: Qid,
         mode: u32,
-        atime: u32,
-        mtime: u32,
+        atime: Timespec,
+        mtime: Timespec,
+        ctime: Timespec,
+        creation_time: Timespec,
     },
     Directory {
         name: String,
         children: HashMap<String, Arc<Mutex<FsNode>>>,
         qid: Qid,
         mode: u32,
-        atime: u32,
-        mtime: u32,
+        atime: Timespec,
+        mtime: Timespec,
+        ctime: Timespec,
+        creation_time: Timespec,
     },
 }
 
 impl FsNode {
-    fn qid(&self) -> Qid {
+    pub fn qid(&self) -> Qid {
         match self {
-            FsNode::File { qid, .. } => qid.clone(),
             FsNode::Directory { qid, .. } => qid.clone(),
+            FsNode::File { qid, .. } => qid.clone(),
         }
     }
 
-    fn name(&self) -> String {
+    pub fn atime_sec(&self) -> u64 {
         match self {
-            FsNode::File { name, .. } => name.clone(),
-            FsNode::Directory { name, .. } => name.clone(),
+            FsNode::Directory { atime, .. } => atime.sec,
+            FsNode::File { atime, .. } => atime.sec,
         }
     }
 
-    fn update_atime(&mut self) {
+    pub fn atime_nsec(&self) -> u64 {
+        match self {
+            FsNode::Directory { atime, .. } => atime.nsec,
+            FsNode::File { atime, .. } => atime.nsec,
+        }
+    }
+
+    pub fn mtime_sec(&self) -> u64 {
+        match self {
+            FsNode::Directory { mtime, .. } => mtime.sec,
+            FsNode::File { mtime, .. } => mtime.sec,
+        }
+    }
+
+    pub fn mtime_nsec(&self) -> u64 {
+        match self {
+            FsNode::Directory { mtime, .. } => mtime.nsec,
+            FsNode::File { mtime, .. } => mtime.nsec,
+        }
+    }
+
+    pub fn ctime_sec(&self) -> u64 {
+        match self {
+            FsNode::Directory { ctime, .. } => ctime.sec,
+            FsNode::File { ctime, .. } => ctime.sec,
+        }
+    }
+
+    pub fn ctime_nsec(&self) -> u64 {
+        match self {
+            FsNode::Directory { ctime, .. } => ctime.nsec,
+            FsNode::File { ctime, .. } => ctime.nsec,
+        }
+    }
+
+    pub fn creation_time_sec(&self) -> u64 {
+        match self {
+            FsNode::Directory { creation_time, .. } => creation_time.sec,
+            FsNode::File { creation_time, .. } => creation_time.sec,
+        }
+    }
+
+    pub fn creation_time_nsec(&self) -> u64 {
+        match self {
+            FsNode::Directory { creation_time, .. } => creation_time.nsec,
+            FsNode::File { creation_time, .. } => creation_time.nsec,
+        }
+    }
+
+    pub fn update_atime(&mut self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as u32;
+            .unwrap_or(Duration::from_secs(0));
+
+        let timestamp = Timespec {
+            sec: now.as_secs(),
+            nsec: now.subsec_nanos() as u64,
+        };
+
         match self {
-            FsNode::File { atime, .. } => *atime = now,
-            FsNode::Directory { atime, .. } => *atime = now,
+            FsNode::Directory { atime, .. } => *atime = timestamp,
+            FsNode::File { atime, .. } => *atime = timestamp,
         }
     }
 
-    fn update_mtime(&mut self) {
+    pub fn update_mtime(&mut self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as u32;
+            .unwrap_or(Duration::from_secs(0));
+
+        let timestamp = Timespec {
+            sec: now.as_secs(),
+            nsec: now.subsec_nanos() as u64,
+        };
+
         match self {
-            FsNode::File { mtime, .. } => *mtime = now,
-            FsNode::Directory { mtime, .. } => *mtime = now,
+            FsNode::Directory { mtime, qid, .. } => {
+                *mtime = timestamp;
+                qid.version += 1;
+            }
+            FsNode::File { mtime, qid, .. } => {
+                *mtime = timestamp;
+                qid.version += 1;
+            }
+        }
+    }
+
+    pub fn update_ctime(&mut self) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::from_secs(0));
+
+        let timestamp = Timespec {
+            sec: now.as_secs(),
+            nsec: now.subsec_nanos() as u64,
+        };
+
+        match self {
+            FsNode::Directory { ctime, .. } => *ctime = timestamp,
+            FsNode::File { ctime, .. } => *ctime = timestamp,
         }
     }
 
     fn to_stat(&self) -> Stat {
         match self {
+            FsNode::Directory {
+                name,
+                children,
+                qid,
+                mode,
+                atime,
+                mtime,
+                ..
+            } => {
+                Stat {
+                    qtype: 0x80, // QTDIR
+                    dev: 0,
+                    qid: qid.clone(),
+                    mode: *mode | 0x80000000, // directory permission + DMDIR flag
+                    atime: atime.sec as u32,
+                    mtime: mtime.sec as u32,
+                    length: 0, // directories have zero length
+                    name: name.clone(),
+                    uid: "user".to_string(),
+                    gid: "user".to_string(),
+                    muid: "user".to_string(),
+                }
+            }
             FsNode::File {
                 name,
                 content,
@@ -72,43 +181,39 @@ impl FsNode {
                 mode,
                 atime,
                 mtime,
-            } => {
-                Stat {
-                    qtype: 0x00, // Regular file
-                    dev: 0,
-                    qid: qid.clone(),
-                    mode: *mode,
-                    atime: *atime,
-                    mtime: *mtime,
-                    length: content.len() as u64,
-                    name: name.clone(),
-                    uid: "nobody".to_string(),
-                    gid: "nobody".to_string(),
-                    muid: "nobody".to_string(),
-                }
-            }
-            FsNode::Directory {
-                name,
-                qid,
-                mode,
-                atime,
-                mtime,
-                children,
-            } => {
-                Stat {
-                    qtype: 0x80, // Directory
-                    dev: 0,
-                    qid: qid.clone(),
-                    mode: *mode | 0x80000000, // DMDIR flag
-                    atime: *atime,
-                    mtime: *mtime,
-                    length: 0,
-                    name: name.clone(),
-                    uid: "nobody".to_string(),
-                    gid: "nobody".to_string(),
-                    muid: "nobody".to_string(),
-                }
-            }
+                ..
+            } => Stat {
+                qtype: 0,
+                dev: 0,
+                qid: qid.clone(),
+                mode: *mode,
+                atime: atime.sec as u32,
+                mtime: mtime.sec as u32,
+                length: content.len() as u64,
+                name: name.clone(),
+                uid: "user".to_string(),
+                gid: "user".to_string(),
+                muid: "user".to_string(),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Timespec {
+    pub sec: u64,
+    pub nsec: u64,
+}
+
+impl Timespec {
+    pub fn now() -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::from_secs(0));
+
+        Timespec {
+            sec: now.as_secs(),
+            nsec: now.subsec_nanos() as u64,
         }
     }
 }
@@ -118,7 +223,7 @@ impl FsNode {
 struct FidState {
     node: Arc<Mutex<FsNode>>,
     is_open: bool,
-    open_mode: Option<u8>,
+    open_mode: Option<u32>,
     path: Vec<String>,
 }
 
@@ -130,11 +235,7 @@ pub struct Memory {
 
 impl Memory {
     pub fn new() -> Self {
-        // Create root directory
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as u32;
+        let now = Timespec::now();
         let root = FsNode::Directory {
             name: "/".to_string(),
             children: HashMap::new(),
@@ -144,8 +245,10 @@ impl Memory {
                 path: 0,
             },
             mode: 0o755,
-            atime: now,
-            mtime: now,
+            atime: now.clone(),
+            mtime: now.clone(),
+            ctime: now.clone(),
+            creation_time: now,
         };
 
         Self {
@@ -176,7 +279,7 @@ impl Memory {
         let mut current = self.root.clone();
 
         for element in path_elements {
-            // Use a block scope to ensure the lock is released before reassigning current
+            // use a block scope to ensure the lock is released before reassigning current
             let next_node = {
                 let node = current.lock().unwrap();
                 match &*node {
@@ -185,7 +288,7 @@ impl Memory {
                 }
             };
 
-            // Process the result after the lock is released
+            // process the result after the lock is released
             if let Some(child) = next_node {
                 current = child;
             } else {
@@ -196,68 +299,69 @@ impl Memory {
         Some(current)
     }
 
-    // Create a directory entry list for Rread of a directory
+    // create a directory entry list for Rread of a directory
     fn create_dir_entries(&self, dir_node: &FsNode) -> Vec<u8> {
         let mut result = Vec::new();
 
         if let FsNode::Directory { children, .. } = dir_node {
-            // Add entry for current directory
-            let stat = dir_node.to_stat();
-            let mut entry_size = 2 + 13 + 4 + 4 + 4 + 8; // Fixed size elements
-            entry_size += 2 + stat.name.len(); // name
-            entry_size += 2 + stat.uid.len(); // uid
-            entry_size += 2 + stat.gid.len(); // gid
-            entry_size += 2 + stat.muid.len(); // muid
-
-            let mut entry = Vec::with_capacity(entry_size + 2);
-            entry.extend_from_slice(&(entry_size as u16).to_le_bytes());
-            entry.extend_from_slice(&stat.qtype.to_le_bytes());
-            entry.extend_from_slice(&0u32.to_le_bytes()); // dev
-            entry.extend_from_slice(&stat.qid.qtype.to_le_bytes());
-            entry.extend_from_slice(&stat.qid.version.to_le_bytes());
-            entry.extend_from_slice(&stat.qid.path.to_le_bytes());
-            entry.extend_from_slice(&stat.mode.to_le_bytes());
-            entry.extend_from_slice(&stat.atime.to_le_bytes());
-            entry.extend_from_slice(&stat.mtime.to_le_bytes());
-            entry.extend_from_slice(&stat.length.to_le_bytes());
-
-            // Add strings
-            for s in &[&stat.name, &stat.uid, &stat.gid, &stat.muid] {
-                entry.extend_from_slice(&(s.len() as u16).to_le_bytes());
-                entry.extend_from_slice(s.as_bytes());
-            }
-
-            result.extend_from_slice(&entry);
-
-            // Add entries for all children
-            for (_, child) in children {
+            // create a consistent stat structure format based on 9P2000 spec
+            for (name, child) in children {
                 let child_node = child.lock().unwrap();
                 let stat = child_node.to_stat();
 
-                let mut entry_size = 2 + 13 + 4 + 4 + 4 + 8; // Fixed size elements
-                entry_size += 2 + stat.name.len(); // name
-                entry_size += 2 + stat.uid.len(); // uid
-                entry_size += 2 + stat.gid.len(); // gid
-                entry_size += 2 + stat.muid.len(); // muid
+                // format correctly according to 9P spec:
+                // size[2] + type[2] + dev[4] + qid.type[1] + qid.vers[4] + qid.path[8] +
+                // mode[4] + atime[4] + mtime[4] + length[8] +
+                // name[s] + uid[s] + gid[s] + muid[s]
 
-                let mut entry = Vec::with_capacity(entry_size + 2);
-                entry.extend_from_slice(&(entry_size as u16).to_le_bytes());
-                entry.extend_from_slice(&stat.qtype.to_le_bytes());
-                entry.extend_from_slice(&0u32.to_le_bytes()); // dev
-                entry.extend_from_slice(&stat.qid.qtype.to_le_bytes());
+                // Start with calculating the size (excluding size field itself)
+                let strings_len = 2
+                    + stat.name.len()
+                    + 2
+                    + stat.uid.len()
+                    + 2
+                    + stat.gid.len()
+                    + 2
+                    + stat.muid.len();
+                let fixed_fields_len = 2 + 4 + 13 + 4 + 4 + 4 + 8; // All fixed-size fields
+                let stat_size = fixed_fields_len + strings_len;
+
+                // Now build the entry
+                let mut entry = Vec::with_capacity(stat_size + 2);
+
+                // Size field (2 bytes) - excluding itself
+                entry.extend_from_slice(&(stat_size as u16).to_le_bytes());
+
+                // Type field (2 bytes)
+                entry.extend_from_slice(&(stat.qtype as u16).to_le_bytes());
+
+                // Dev field (4 bytes)
+                entry.extend_from_slice(&stat.dev.to_le_bytes());
+
+                // Qid (13 bytes: 1+4+8)
+                entry.push(stat.qid.qtype);
                 entry.extend_from_slice(&stat.qid.version.to_le_bytes());
                 entry.extend_from_slice(&stat.qid.path.to_le_bytes());
+
+                // Mode (4 bytes)
                 entry.extend_from_slice(&stat.mode.to_le_bytes());
+
+                // Atime (4 bytes)
                 entry.extend_from_slice(&stat.atime.to_le_bytes());
+
+                // Mtime (4 bytes)
                 entry.extend_from_slice(&stat.mtime.to_le_bytes());
+
+                // Length (8 bytes)
                 entry.extend_from_slice(&stat.length.to_le_bytes());
 
-                // Add strings
+                // Strings
                 for s in &[&stat.name, &stat.uid, &stat.gid, &stat.muid] {
                     entry.extend_from_slice(&(s.len() as u16).to_le_bytes());
                     entry.extend_from_slice(s.as_bytes());
                 }
 
+                // Add to result
                 result.extend_from_slice(&entry);
             }
         }
@@ -268,18 +372,20 @@ impl Memory {
 
 impl MessageHandler for Memory {
     async fn handle_message(&self, message: Message) -> Message {
+        info!(?message);
+
         match message {
             Message::Tversion { tag, msize, .. } => Message::Rversion {
                 tag,
                 msize: msize.min(8192),
-                version: "9P2000".to_string(),
+                version: "9P2000.L".to_string(),
             },
 
             Message::Tauth { tag, .. } => {
                 // We don't require authentication
-                Message::Rerror {
+                Message::Rlerror {
                     tag,
-                    ename: "Authentication not required".to_string(),
+                    ecode: 2, // EOPNOTSUPP (Operation not supported)
                 }
             }
 
@@ -392,23 +498,23 @@ impl MessageHandler for Memory {
                 Message::Rwalk { tag, wqids }
             }
 
-            Message::Topen { tag, fid, mode } => {
+            Message::Tlopen { tag, fid, flags } => {
                 let mut fids = self.fids.lock().unwrap();
 
                 // Check if fid exists
                 if !fids.contains_key(&fid) {
-                    return Message::Rerror {
+                    return Message::Rlerror {
                         tag,
-                        ename: "Fid not found".to_string(),
+                        ecode: 2, // ENOENT
                     };
                 }
 
                 let fid_state = fids.get_mut(&fid).unwrap();
 
                 if fid_state.is_open {
-                    return Message::Rerror {
+                    return Message::Rlerror {
                         tag,
-                        ename: "Fid already open".to_string(),
+                        ecode: 9, // EBADF
                     };
                 }
 
@@ -417,104 +523,32 @@ impl MessageHandler for Memory {
 
                 // Mark as open
                 fid_state.is_open = true;
-                fid_state.open_mode = Some(mode);
+                fid_state.open_mode = Some(flags);
 
-                let qid = fid_state.node.lock().unwrap().qid();
+                let node = fid_state.node.lock().unwrap();
+                let qid = node.qid();
 
-                Message::Ropen {
+                // Check if this is a directory and open flags are compatible
+                match &*node {
+                    FsNode::Directory { .. } => {
+                        // For directories, typically only O_RDONLY (0) is allowed
+                        if flags & 3 != 0 {
+                            // Check if not O_RDONLY
+                            return Message::Rlerror {
+                                tag,
+                                ecode: 21, // EISDIR
+                            };
+                        }
+                    }
+                    FsNode::File { .. } => {
+                        // Files can have any open mode
+                    }
+                }
+
+                Message::Rlopen {
                     tag,
                     qid,
                     iounit: 8192, // Maximum recommended transfer size
-                }
-            }
-
-            Message::Tcreate {
-                tag,
-                fid,
-                name,
-                perm,
-                mode,
-            } => {
-                let mut fids = self.fids.lock().unwrap();
-
-                // Check if fid exists and points to a directory
-                if !fids.contains_key(&fid) {
-                    return Message::Rerror {
-                        tag,
-                        ename: "Fid not found".to_string(),
-                    };
-                }
-
-                let fid_state = fids.get_mut(&fid).unwrap();
-                let node_ref = fid_state.node.clone();
-                let mut node = node_ref.lock().unwrap();
-
-                match &mut *node {
-                    FsNode::Directory { children, .. } => {
-                        // Check if entry already exists
-                        if children.contains_key(&name) {
-                            return Message::Rerror {
-                                tag,
-                                ename: "File already exists".to_string(),
-                            };
-                        }
-
-                        let is_dir = (perm & 0x80000000) != 0;
-                        let now = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs() as u32;
-
-                        // Create the new node (file or directory)
-                        let new_qid = self.next_qid(is_dir);
-                        let new_node = if is_dir {
-                            FsNode::Directory {
-                                name: name.clone(),
-                                children: HashMap::new(),
-                                qid: new_qid.clone(),
-                                mode: perm & 0o777,
-                                atime: now,
-                                mtime: now,
-                            }
-                        } else {
-                            FsNode::File {
-                                name: name.clone(),
-                                content: Vec::new(),
-                                qid: new_qid.clone(),
-                                mode: perm & 0o777,
-                                atime: now,
-                                mtime: now,
-                            }
-                        };
-
-                        // Add to parent directory
-                        let new_node_ref = Arc::new(Mutex::new(new_node));
-                        children.insert(name.clone(), new_node_ref.clone());
-
-                        // Update parent directory's modification time
-                        node.update_mtime();
-
-                        // Update fid to point to the new node
-                        drop(node); // Release lock on node before modifying fid_state
-
-                        let mut new_path = fid_state.path.clone();
-                        new_path.push(name);
-
-                        fid_state.node = new_node_ref;
-                        fid_state.path = new_path;
-                        fid_state.is_open = true;
-                        fid_state.open_mode = Some(mode);
-
-                        Message::Rcreate {
-                            tag,
-                            qid: new_qid,
-                            iounit: 8192,
-                        }
-                    }
-                    FsNode::File { .. } => Message::Rerror {
-                        tag,
-                        ename: "Not a directory".to_string(),
-                    },
                 }
             }
 
@@ -587,7 +621,7 @@ impl MessageHandler for Memory {
             } => {
                 let mut fids = self.fids.lock().unwrap();
 
-                // Check if fid exists and is open for writing
+                // check if fid exists and is open for writing
                 if !fids.contains_key(&fid) {
                     return Message::Rerror {
                         tag,
@@ -604,7 +638,7 @@ impl MessageHandler for Memory {
                     };
                 }
 
-                // Check write permission (simplified)
+                // check write permission (simplified)
                 let open_mode = fid_state.open_mode.unwrap_or(0);
                 if open_mode & 0x01 == 0 && open_mode & 0x02 == 0 {
                     // Not O_WRITE or O_RDWR
@@ -620,18 +654,18 @@ impl MessageHandler for Memory {
                     FsNode::File {
                         ref mut content, ..
                     } => {
-                        // Write to file
+                        // write to file
                         let start = offset as usize;
 
-                        // Ensure file is large enough
+                        // ensure file is large enough
                         if start + data.len() > content.len() {
                             content.resize(start + data.len(), 0);
                         }
 
-                        // Write the data
+                        // write the data
                         content[start..start + data.len()].copy_from_slice(&data);
 
-                        // Update modification time
+                        // update modification time
                         node.update_mtime();
 
                         Message::Rwrite {
@@ -649,7 +683,6 @@ impl MessageHandler for Memory {
             Message::Tclunk { tag, fid } => {
                 let mut fids = self.fids.lock().unwrap();
 
-                // Remove fid from our map
                 if fids.remove(&fid).is_some() {
                     Message::Rclunk { tag }
                 } else {
@@ -663,7 +696,6 @@ impl MessageHandler for Memory {
             Message::Tremove { tag, fid } => {
                 let mut fids = self.fids.lock().unwrap();
 
-                // Check if fid exists
                 if !fids.contains_key(&fid) {
                     return Message::Rerror {
                         tag,
@@ -674,7 +706,7 @@ impl MessageHandler for Memory {
                 let fid_state = fids.get(&fid).unwrap().clone();
                 let path_elements = fid_state.path.clone();
 
-                // Cannot remove root
+                // cannot remove root
                 if path_elements.is_empty() {
                     fids.remove(&fid);
                     return Message::Rerror {
@@ -683,7 +715,7 @@ impl MessageHandler for Memory {
                     };
                 }
 
-                // Find parent directory
+                // find parent directory
                 let parent_path = &path_elements[0..path_elements.len() - 1];
                 let filename = path_elements.last().unwrap();
 
@@ -694,12 +726,12 @@ impl MessageHandler for Memory {
                         FsNode::Directory {
                             ref mut children, ..
                         } => {
-                            // Remove the entry
+                            // remove the entry
                             if children.remove(filename).is_some() {
-                                // Update modification time
+                                // update modification time
                                 parent.update_mtime();
 
-                                // Remove the fid regardless of success
+                                // remove the fid regardless of success
                                 fids.remove(&fid);
 
                                 return Message::Rremove { tag };
@@ -728,10 +760,68 @@ impl MessageHandler for Memory {
                 }
             }
 
-            Message::Tstat { tag, fid } => {
+            Message::Tgetattr {
+                tag,
+                fid,
+                request_mask,
+            } => {
                 let fids = self.fids.lock().unwrap();
 
                 // Check if fid exists
+                if !fids.contains_key(&fid) {
+                    return Message::Rlerror {
+                        tag,
+                        ecode: 2, // ENOENT
+                    };
+                }
+
+                let fid_state = fids.get(&fid).unwrap();
+                let node = fid_state.node.lock().unwrap();
+
+                // Default values
+                let (mode, size, nlink) = match &*node {
+                    FsNode::Directory { mode, children, .. } => {
+                        // For directories: appropriate mode with directory bit, size 0, link count based on children + 2 (. and ..)
+                        (*mode | 0x80000000, 0, (children.len() + 2) as u64)
+                    }
+                    FsNode::File { mode, content, .. } => {
+                        // For files: file mode, content size, link count 1
+                        (*mode, content.len() as u64, 1)
+                    }
+                };
+
+                // TODO: filter based on request_mask
+                let valid = 0xFFFFFFFF; // all fields valid
+
+                Message::Rgetattr {
+                    tag,
+                    valid,
+                    qid: node.qid(),
+                    mode,
+                    uid: 1000, // default user ID
+                    gid: 1000, // default group ID
+                    nlink,
+                    rdev: 0, // not a device file
+                    size,
+                    blksize: 4096,                // default block size
+                    blocks: (size + 4095) / 4096, // number of blocks used (rounded up)
+                    atime_sec: node.atime_sec(),
+                    atime_nsec: node.atime_nsec(),
+                    mtime_sec: node.mtime_sec(),
+                    mtime_nsec: node.mtime_nsec(),
+                    ctime_sec: node.ctime_sec(),
+                    ctime_nsec: node.ctime_nsec(),
+                    btime_sec: node.creation_time_sec(),
+                    btime_nsec: node.creation_time_nsec(),
+                    gen: 0,          // generation number (not used)
+                    data_version: 0, // data version (not used)
+                }
+            }
+
+            Message::Tstat { tag, fid } => {
+                let fids = self.fids.lock().unwrap();
+
+                // check if fid exists
                 if !fids.contains_key(&fid) {
                     return Message::Rerror {
                         tag,
@@ -751,7 +841,7 @@ impl MessageHandler for Memory {
             Message::Twstat { tag, fid, stat } => {
                 let fids = self.fids.lock().unwrap();
 
-                // Check if fid exists
+                // check if fid exists
                 if !fids.contains_key(&fid) {
                     return Message::Rerror {
                         tag,
@@ -762,21 +852,21 @@ impl MessageHandler for Memory {
                 let fid_state = fids.get(&fid).unwrap();
                 let mut node = fid_state.node.lock().unwrap();
 
-                // For simplicity, we only allow changing mode and name
+                // for simplicity, we only allow changing mode and name
                 match &mut *node {
                     FsNode::File {
                         ref mut name,
                         ref mut mode,
                         ..
                     } => {
-                        // Update fields if they're not ~0 (which means don't change)
+                        // update fields if they're not ~0 (which means don't change)
                         if stat.mode != 0xFFFFFFFF {
                             *mode = stat.mode & 0o777; // Only allow changing permission bits
                         }
 
                         if !stat.name.is_empty() {
-                            // Changing name would require updating the parent directory too
-                            // For simplicity, we don't allow this
+                            // changing name would require updating the parent directory too
+                            // for simplicity, we don't allow this
                             // *name = stat.name.clone();
                             return Message::Rerror {
                                 tag,
@@ -793,14 +883,14 @@ impl MessageHandler for Memory {
                         ref mut mode,
                         ..
                     } => {
-                        // Update fields if they're not ~0 (which means don't change)
+                        // update fields if they're not ~0 (which means don't change)
                         if stat.mode != 0xFFFFFFFF {
                             *mode = stat.mode & 0o777; // Only allow changing permission bits
                         }
 
                         if !stat.name.is_empty() {
-                            // Changing name would require updating the parent directory too
-                            // For simplicity, we don't allow this
+                            // changing name would require updating the parent directory too
+                            // for simplicity, we don't allow this
                             // *name = stat.name.clone();
                             return Message::Rerror {
                                 tag,
@@ -815,13 +905,10 @@ impl MessageHandler for Memory {
                 }
             }
 
-            _ => {
-                // Return an error for any unimplemented messages
-                Message::Rerror {
-                    tag: message.get_tag(),
-                    ename: "Operation not implemented".to_string(),
-                }
-            }
+            _ => Message::Rerror {
+                tag: message.get_tag(),
+                ename: "Operation not implemented".to_string(),
+            },
         }
     }
 }
