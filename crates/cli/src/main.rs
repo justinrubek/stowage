@@ -1,17 +1,16 @@
 use crate::{
     commands::{Commands, ServerCommands},
     error::Result,
-    handlers::Memory,
 };
 use clap::Parser;
 use std::sync::Arc;
+use stowage_filesystems::memory::Handler;
 use stowage_service::Plan9;
 use tokio::net::TcpListener;
 use tracing::{error, info};
 
 mod commands;
 mod error;
-mod handlers;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -26,7 +25,7 @@ async fn main() -> Result<()> {
                     let listener = TcpListener::bind(server.addr).await?;
                     info!("listening on: {}", server.addr);
 
-                    let fs = Arc::new(Memory::new());
+                    let fs = Arc::new(Handler::new());
 
                     loop {
                         let (socket, addr) = listener.accept().await?;

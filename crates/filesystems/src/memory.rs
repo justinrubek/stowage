@@ -227,13 +227,13 @@ struct FidState {
     path: Vec<String>,
 }
 
-pub struct Memory {
+pub struct Handler {
     root: Arc<Mutex<FsNode>>,
     fids: Mutex<HashMap<u32, FidState>>,
     next_qid_path: Mutex<u64>,
 }
 
-impl Memory {
+impl Handler {
     pub fn new() -> Self {
         let now = Timespec::now();
         let root = FsNode::Directory {
@@ -370,7 +370,7 @@ impl Memory {
     }
 }
 
-impl MessageHandler for Memory {
+impl MessageHandler for Handler {
     async fn handle_message(&self, message: Message) -> Message {
         info!(?message);
 

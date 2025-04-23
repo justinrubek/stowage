@@ -2,6 +2,7 @@
 clap = { version = "4", features = ["derive"] }
 # serde = { workspace = true }
 # serde_json = { workspace = true }
+stowage-filesystems = { path = "../filesystems" }
 stowage-proto = { path = "../proto" }
 stowage-service = { path = "../service" }
 thiserror = { workspace = true }

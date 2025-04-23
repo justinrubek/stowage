@@ -472,12 +472,22 @@ name = "stowage-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "stowage-filesystems",
  "stowage-proto",
  "stowage-service",
  "thiserror",
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "stowage-filesystems"
+version = "0.1.0"
+dependencies = [
+ "stowage-proto",
+ "stowage-service",
+ "tracing",
 ]
 
 [[package]]

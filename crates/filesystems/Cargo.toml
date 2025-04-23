@@ -1,0 +1,16 @@
+[dependencies]
+stowage-proto = { path = "../proto" }
+stowage-service = { path = "../service" }
+tracing = { workspace = true }
+
+[lints]
+workspace = true
+
+[package]
+name = "stowage-filesystems"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+homepage = { workspace = true }
+authors = { workspace = true }
