@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 #[derive(clap::Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub(crate) struct Args {
@@ -17,6 +19,9 @@ pub(crate) struct ServerCommand {
 
     #[arg(default_value = "0.0.0.0:3000", long, short)]
     pub addr: std::net::SocketAddr,
+
+    #[arg(default_value = "data", long, short)]
+    pub path: PathBuf,
 }
 
 /// A command for running the API server

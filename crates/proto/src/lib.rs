@@ -3,6 +3,7 @@ use bytes::{Buf, BufMut, BytesMut};
 use std::convert::TryFrom;
 use tokio_util::codec::{Decoder, Encoder};
 
+pub mod consts;
 pub mod error;
 
 pub struct Codec;
@@ -253,7 +254,7 @@ pub struct Attr {
 pub struct Dirent {
     pub qid: Qid,
     pub offset: u64,
-    pub typ: u8,
+    pub dtype: u8,
     pub name: String,
 }
 
@@ -1928,7 +1929,7 @@ fn decode_attr(buf: &mut BytesMut) -> Result<Attr> {
 fn encode_dirent(buf: &mut BytesMut, dirent: &Dirent) {
     encode_qid(buf, &dirent.qid);
     buf.put_u64_le(dirent.offset);
-    buf.put_u8(dirent.typ);
+    buf.put_u8(dirent.dtype);
     encode_string(buf, &dirent.name);
 }
 
@@ -1946,7 +1947,7 @@ fn decode_dirent(buf: &mut BytesMut) -> Result<Dirent> {
     Ok(Dirent {
         qid,
         offset,
-        typ,
+        dtype: typ,
         name,
     })
 }

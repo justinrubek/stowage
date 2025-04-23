@@ -4,7 +4,7 @@ use crate::{
 };
 use clap::Parser;
 use std::sync::Arc;
-use stowage_filesystems::memory::Handler;
+use stowage_filesystems::disk::Handler;
 use stowage_service::Plan9;
 use tokio::net::TcpListener;
 use tracing::{error, info};
@@ -23,15 +23,15 @@ async fn main() -> Result<()> {
             match cmd {
                 ServerCommands::Start => {
                     let listener = TcpListener::bind(server.addr).await?;
-                    info!("listening on: {}", server.addr);
+                    info!(?server.addr, ?server.path, "listening");
 
-                    let fs = Arc::new(Handler::new());
+                    let handler = Arc::new(Handler::new(server.path));
 
                     loop {
                         let (socket, addr) = listener.accept().await?;
                         info!("new connection from: {addr}");
 
-                        let fs_clone = fs.clone();
+                        let fs_clone = handler.clone();
                         tokio::spawn(async move {
                             let service = Plan9::new(socket, fs_clone);
                             if let Err(err) = service.run().await {
