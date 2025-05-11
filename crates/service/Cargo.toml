@@ -1,5 +1,5 @@
 [dependencies]
-futures = "0.3.31"
+futures = { workspace = true }
 # serde = { workspace = true }
 # serde_json = { workspace = true }
 stowage-proto = { path = "../proto" }

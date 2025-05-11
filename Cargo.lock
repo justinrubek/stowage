@@ -471,12 +471,15 @@ dependencies = [
 name = "stowage-cli"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "clap",
+ "futures",
  "stowage-filesystems",
  "stowage-proto",
  "stowage-service",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]

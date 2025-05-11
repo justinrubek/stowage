@@ -9,6 +9,7 @@ pub(crate) struct Args {
 
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum Commands {
+    Fs(FileCommand),
     Server(ServerCommand),
 }
 
@@ -29,4 +30,18 @@ pub(crate) struct ServerCommand {
 pub(crate) enum ServerCommands {
     /// start the http server
     Start,
+}
+
+#[derive(clap::Args, Debug)]
+pub(crate) struct FileCommand {
+    #[clap(subcommand)]
+    pub command: FileCommands,
+
+    #[arg(default_value = "0.0.0.0:3000", long, short)]
+    pub addr: std::net::SocketAddr,
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub(crate) enum FileCommands {
+    Ls { path: Option<String> },
 }

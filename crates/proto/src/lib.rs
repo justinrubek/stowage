@@ -34,6 +34,7 @@ impl Decoder for Codec {
         // skip the size field and retrieve the body
         src.advance(4);
         let mut message_body = src.split_to(size - 4);
+        println!("dec: {:?}", message_body);
         let message = Message::decode(&mut message_body)?;
 
         Ok(Some(message))
