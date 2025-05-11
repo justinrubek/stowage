@@ -6,8 +6,8 @@ pub enum Error {
     InvalidFormat,
     #[error("Invalid utf8")]
     InvalidUtf8,
-    #[error("Buffer too short")]
-    BufferTooShort,
+    #[error("Buffer too small")]
+    BufferTooSmall,
     #[error(transparent)]
     StdIo(#[from] std::io::Error),
     #[error(transparent)]

@@ -1,6 +1,7 @@
 use crate::error::{Error, Result};
 use bytes::{Buf, BufMut, BytesMut};
 use std::convert::TryFrom;
+use stowage_derive::{DecodeBytes, EncodeBytes};
 use tokio_util::codec::{Decoder, Encoder};
 
 pub mod consts;
@@ -108,26 +109,16 @@ pub enum MessageType {
     Rrenameat = 75,
     Tunlinkat = 76,
     Runlinkat = 77,
-    // Classic 9P messages
     Tversion = 100,
     Rversion = 101,
     Tauth = 102,
     Rauth = 103,
     Tattach = 104,
     Rattach = 105,
-    /// Not used in protocol - illegal message type
-    #[doc(hidden)]
-    #[deprecated(note = "Terror is an illegal message type in 9P protocol")]
-    Terror = 106,
-    Rerror = 107,
     Tflush = 108,
     Rflush = 109,
     Twalk = 110,
     Rwalk = 111,
-    Topen = 112,
-    Ropen = 113,
-    Tcreate = 114,
-    Rcreate = 115,
     Tread = 116,
     Rread = 117,
     Twrite = 118,
@@ -136,12 +127,6 @@ pub enum MessageType {
     Rclunk = 121,
     Tremove = 122,
     Rremove = 123,
-    Tstat = 124,
-    Rstat = 125,
-    Twstat = 126,
-    Rwstat = 127,
-    Topenfd = 98,
-    Ropenfd = 99,
 }
 
 /// File types
@@ -192,15 +177,14 @@ pub enum SetattrValid {
     MtimeSet = 0x00000100,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
 pub struct Qid {
     pub qtype: u8,
     pub version: u32,
     pub path: u64,
 }
 
-/// Traditional 9P stat structure, kept for compatibility
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
 pub struct Stat {
     /// File type
     pub qtype: u16,
@@ -249,8 +233,7 @@ pub struct Attr {
     pub data_version: u64,
 }
 
-/// Represents a directory entry in 9P2000.L
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
 pub struct Dirent {
     pub qid: Qid,
     pub offset: u64,
@@ -259,7 +242,7 @@ pub struct Dirent {
 }
 
 /// Represents file system statistics
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
 pub struct StatFs {
     pub r#type: u32,
     pub bsize: u32,
@@ -273,9 +256,9 @@ pub struct StatFs {
 }
 
 /// Lock structure for file locking
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
 pub struct Lock {
-    pub r#type: u8,
+    pub ltype: u8,
     pub flags: u32,
     pub start: u64,
     pub length: u64,
@@ -285,1791 +268,215 @@ pub struct Lock {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
-    // Classic 9P messages
-    Tversion {
-        tag: u16,
-        msize: u32,
-        version: String,
-    },
-    Rversion {
-        tag: u16,
-        msize: u32,
-        version: String,
-    },
-    Tauth {
-        tag: u16,
-        afid: u32,
-        uname: String,
-        aname: String,
-    },
-    Rauth {
-        tag: u16,
-        aqid: Qid,
-    },
-    Tattach {
-        tag: u16,
-        fid: u32,
-        afid: u32,
-        uname: String,
-        aname: String,
-    },
-    Rattach {
-        tag: u16,
-        qid: Qid,
-    },
-    Rerror {
-        tag: u16,
-        ename: String,
-    },
-    Rlerror {
-        tag: u16,
-        ecode: u32,
-    },
-    Tflush {
-        tag: u16,
-        oldtag: u16,
-    },
-    Rflush {
-        tag: u16,
-    },
-    Twalk {
-        tag: u16,
-        fid: u32,
-        newfid: u32,
-        wnames: Vec<String>,
-    },
-    Rwalk {
-        tag: u16,
-        wqids: Vec<Qid>,
-    },
-    Topen {
-        tag: u16,
-        fid: u32,
-        mode: u8,
-    },
-    Ropen {
-        tag: u16,
-        qid: Qid,
-        iounit: u32,
-    },
-    Tcreate {
-        tag: u16,
-        fid: u32,
-        name: String,
-        perm: u32,
-        mode: u8,
-    },
-    Rcreate {
-        tag: u16,
-        qid: Qid,
-        iounit: u32,
-    },
-    Tread {
-        tag: u16,
-        fid: u32,
-        offset: u64,
-        count: u32,
-    },
-    Rread {
-        tag: u16,
-        data: Vec<u8>,
-    },
-    Twrite {
-        tag: u16,
-        fid: u32,
-        offset: u64,
-        data: Vec<u8>,
-    },
-    Rwrite {
-        tag: u16,
-        count: u32,
-    },
-    Tclunk {
-        tag: u16,
-        fid: u32,
-    },
-    Rclunk {
-        tag: u16,
-    },
-    Tremove {
-        tag: u16,
-        fid: u32,
-    },
-    Rremove {
-        tag: u16,
-    },
-    Tstat {
-        tag: u16,
-        fid: u32,
-    },
-    Rstat {
-        tag: u16,
-        stat: Stat,
-    },
-    Twstat {
-        tag: u16,
-        fid: u32,
-        stat: Stat,
-    },
-    Rwstat {
-        tag: u16,
-    },
-    Topenfd {
-        tag: u16,
-        fid: u32,
-        mode: u8,
-    },
-    Ropenfd {
-        tag: u16,
-        qid: Qid,
-        iounit: u32,
-        fd: u32,
-    },
+    Rattach(Rattach),
+    Rauth(Rauth),
+    Rclunk(Rclunk),
+    Rlcreate(Rlcreate),
+    Rflush(Rflush),
+    Rfsync(Rfsync),
+    Rgetattr(Rgetattr),
+    Rgetlock(Rgetlock),
+    Rlerror(Rlerror),
+    Rlock(Rlock),
+    Rmkdir(Rmkdir),
+    Rmknod(Rmknod),
+    Rlopen(Rlopen),
+    Rreaddir(Rreaddir),
+    Rread(Rread),
+    Rremove(Rremove),
+    Tlink(Tlink),
+    Rlink(Rlink),
+    Tstatfs(Tstatfs),
+    Rstatfs(Rstatfs),
+    Rrenameat(Rrenameat),
+    Rsetattr(Rsetattr),
+    Rstat(Rstat),
+    Rsymlink(Rsymlink),
+    Runlinkat(Runlinkat),
+    Rversion(Rversion),
+    Rwalk(Rwalk),
+    Rwrite(Rwrite),
+    Rwstat(Rwstat),
+    Rxattrcreate(Rxattrcreate),
+    Rxattrwalk(Rxattrwalk),
+    Tattach(Tattach),
+    Tauth(Tauth),
+    Tclunk(Tclunk),
+    Tlcreate(Tlcreate),
+    Tflush(Tflush),
+    Tfsync(Tfsync),
+    Tgetattr(Tgetattr),
+    Tgetlock(Tgetlock),
+    Tlock(Tlock),
+    Tmkdir(Tmkdir),
+    Tmknod(Tmknod),
+    Tlopen(Tlopen),
+    Treaddir(Treaddir),
+    Tread(Tread),
+    Treadlink(Treadlink),
+    Rreadlink(Rreadlink),
+    Tremove(Tremove),
+    Trename(Trename),
+    Rrename(Rrename),
+    Trenameat(Trenameat),
+    Tsetattr(Tsetattr),
+    Tstat(Tstat),
+    Tsymlink(Tsymlink),
+    Tunlinkat(Tunlinkat),
+    Tversion(Tversion),
+    Twalk(Twalk),
+    Twrite(Twrite),
+    Twstat(Twstat),
+    Txattrcreate(Txattrcreate),
+    Txattrwalk(Txattrwalk),
+}
 
-    // 9P2000.L specific messages
-    Tlopen {
-        tag: u16,
-        fid: u32,
-        flags: u32,
-    },
-    Rlopen {
-        tag: u16,
-        qid: Qid,
-        iounit: u32,
-    },
-    Tlcreate {
-        tag: u16,
-        fid: u32,
-        name: String,
-        flags: u32,
-        mode: u32,
-        gid: u32,
-    },
-    Rlcreate {
-        tag: u16,
-        qid: Qid,
-        iounit: u32,
-    },
-    Tsymlink {
-        tag: u16,
-        fid: u32,
-        name: String,
-        symtgt: String,
-        gid: u32,
-    },
-    Rsymlink {
-        tag: u16,
-        qid: Qid,
-    },
-    Tmknod {
-        tag: u16,
-        dfid: u32,
-        name: String,
-        mode: u32,
-        major: u32,
-        minor: u32,
-        gid: u32,
-    },
-    Rmknod {
-        tag: u16,
-        qid: Qid,
-    },
-    Trename {
-        tag: u16,
-        fid: u32,
-        dfid: u32,
-        name: String,
-    },
-    Rrename {
-        tag: u16,
-    },
-    Treadlink {
-        tag: u16,
-        fid: u32,
-    },
-    Rreadlink {
-        tag: u16,
-        target: String,
-    },
-    Tgetattr {
-        tag: u16,
-        fid: u32,
-        request_mask: u64,
-    },
-    Rgetattr {
-        tag: u16,
-        valid: u64,
-        qid: Qid,
-        mode: u32,
-        uid: u32,
-        gid: u32,
-        nlink: u64,
-        rdev: u64,
-        size: u64,
-        blksize: u64,
-        blocks: u64,
-        atime_sec: u64,
-        atime_nsec: u64,
-        mtime_sec: u64,
-        mtime_nsec: u64,
-        ctime_sec: u64,
-        ctime_nsec: u64,
-        btime_sec: u64,
-        btime_nsec: u64,
-        gen: u64,
-        data_version: u64,
-    },
-    Tsetattr {
-        tag: u16,
-        fid: u32,
-        valid: u32,
-        mode: u32,
-        uid: u32,
-        gid: u32,
-        size: u64,
-        atime_sec: u64,
-        atime_nsec: u64,
-        mtime_sec: u64,
-        mtime_nsec: u64,
-    },
-    Rsetattr {
-        tag: u16,
-    },
-    Txattrwalk {
-        tag: u16,
-        fid: u32,
-        newfid: u32,
-        name: String,
-    },
-    Rxattrwalk {
-        tag: u16,
-        size: u64,
-    },
-    Txattrcreate {
-        tag: u16,
-        fid: u32,
-        name: String,
-        attr_size: u64,
-        flags: u32,
-    },
-    Rxattrcreate {
-        tag: u16,
-    },
-    Treaddir {
-        tag: u16,
-        fid: u32,
-        offset: u64,
-        count: u32,
-    },
-    Rreaddir {
-        tag: u16,
-        data: Vec<Dirent>,
-    },
-    Tfsync {
-        tag: u16,
-        fid: u32,
-    },
-    Rfsync {
-        tag: u16,
-    },
-    Tlock {
-        tag: u16,
-        fid: u32,
-        lock: Lock,
-    },
-    Rlock {
-        tag: u16,
-        status: u8,
-    },
-    Tgetlock {
-        tag: u16,
-        fid: u32,
-        lock: Lock,
-    },
-    Rgetlock {
-        tag: u16,
-        lock: Lock,
-    },
-    Tlink {
-        tag: u16,
-        dfid: u32,
-        fid: u32,
-        name: String,
-    },
-    Rlink {
-        tag: u16,
-    },
-    Tmkdir {
-        tag: u16,
-        dfid: u32,
-        name: String,
-        mode: u32,
-        gid: u32,
-    },
-    Rmkdir {
-        tag: u16,
-        qid: Qid,
-    },
-    Trenameat {
-        tag: u16,
-        olddirfid: u32,
-        oldname: String,
-        newdirfid: u32,
-        newname: String,
-    },
-    Rrenameat {
-        tag: u16,
-    },
-    Tunlinkat {
-        tag: u16,
-        dirfid: u32,
-        name: String,
-        flags: u32,
-    },
-    Runlinkat {
-        tag: u16,
-    },
-    Tstatfs {
-        tag: u16,
-        fid: u32,
-    },
-    Rstatfs {
-        tag: u16,
-        statfs: StatFs,
-    },
+// The error response type (used in the enum above)
+#[derive(Debug, Clone, PartialEq)]
+pub struct Rerror {
+    pub tag: u16,
+    pub ename: String,
+    pub errno: u32, // Linux extension: includes numeric error code
 }
 
 impl Message {
-    #[allow(clippy::too_many_lines)]
     pub fn encode(&self, buf: &mut BytesMut) {
         match self {
-            Message::Tversion {
-                tag,
-                msize,
-                version,
-            } => {
-                buf.put_u8(MessageType::Tversion as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*msize);
-                encode_string(buf, version);
-            }
-            Message::Rversion {
-                tag,
-                msize,
-                version,
-            } => {
-                buf.put_u8(MessageType::Rversion as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*msize);
-                encode_string(buf, version);
-            }
-            Message::Tauth {
-                tag,
-                afid,
-                uname,
-                aname,
-            } => {
-                buf.put_u8(MessageType::Tauth as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*afid);
-                encode_string(buf, uname);
-                encode_string(buf, aname);
-            }
-            Message::Rauth { tag, aqid } => {
-                buf.put_u8(MessageType::Rauth as u8);
-                buf.put_u16_le(*tag);
-                encode_qid(buf, aqid);
-            }
-            Message::Tattach {
-                tag,
-                fid,
-                afid,
-                uname,
-                aname,
-            } => {
-                buf.put_u8(MessageType::Tattach as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-                buf.put_u32_le(*afid);
-                encode_string(buf, uname);
-                encode_string(buf, aname);
-            }
-            Message::Rattach { tag, qid } => {
-                buf.put_u8(MessageType::Rattach as u8);
-                buf.put_u16_le(*tag);
-                encode_qid(buf, qid);
-            }
-            Message::Rerror { tag, ename } => {
-                buf.put_u8(MessageType::Rerror as u8);
-                buf.put_u16_le(*tag);
-                encode_string(buf, ename);
-            }
-            Message::Rlerror { tag, ecode } => {
-                buf.put_u8(MessageType::Rlerror as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*ecode);
-            }
-            Message::Tflush { tag, oldtag } => {
-                buf.put_u8(MessageType::Tflush as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u16_le(*oldtag);
-            }
-            Message::Rflush { tag } => {
-                buf.put_u8(MessageType::Rflush as u8);
-                buf.put_u16_le(*tag);
-            }
-            Message::Twalk {
-                tag,
-                fid,
-                newfid,
-                wnames,
-            } => {
-                buf.put_u8(MessageType::Twalk as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-                buf.put_u32_le(*newfid);
-
-                // number of walk elements
-                buf.put_u16_le(wnames.len() as u16);
-
-                // encode each name
-                for name in wnames {
-                    encode_string(buf, name);
-                }
-            }
-            Message::Rwalk { tag, wqids } => {
-                buf.put_u8(MessageType::Rwalk as u8);
-                buf.put_u16_le(*tag);
-
-                // number of qids
-                buf.put_u16_le(wqids.len() as u16);
-
-                // encode each qid
-                for qid in wqids {
-                    encode_qid(buf, qid);
-                }
-            }
-            Message::Topen { tag, fid, mode } => {
-                buf.put_u8(MessageType::Topen as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-                buf.put_u8(*mode);
-            }
-            Message::Ropen { tag, qid, iounit } => {
-                buf.put_u8(MessageType::Ropen as u8);
-                buf.put_u16_le(*tag);
-                encode_qid(buf, qid);
-                buf.put_u32_le(*iounit);
-            }
-            Message::Tcreate {
-                tag,
-                fid,
-                name,
-                perm,
-                mode,
-            } => {
-                buf.put_u8(MessageType::Tcreate as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-                encode_string(buf, name);
-                buf.put_u32_le(*perm);
-                buf.put_u8(*mode);
-            }
-            Message::Rcreate { tag, qid, iounit } => {
-                buf.put_u8(MessageType::Rcreate as u8);
-                buf.put_u16_le(*tag);
-                encode_qid(buf, qid);
-                buf.put_u32_le(*iounit);
-            }
-            Message::Tread {
-                tag,
-                fid,
-                offset,
-                count,
-            } => {
-                buf.put_u8(MessageType::Tread as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-                buf.put_u64_le(*offset);
-                buf.put_u32_le(*count);
-            }
-            Message::Rread { tag, data } => {
-                buf.put_u8(MessageType::Rread as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(data.len() as u32);
-                buf.put_slice(data);
-            }
-            Message::Twrite {
-                tag,
-                fid,
-                offset,
-                data,
-            } => {
-                buf.put_u8(MessageType::Twrite as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-                buf.put_u64_le(*offset);
-                buf.put_u32_le(data.len() as u32);
-                buf.put_slice(data);
-            }
-            Message::Rwrite { tag, count } => {
-                buf.put_u8(MessageType::Rwrite as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*count);
-            }
-            Message::Tclunk { tag, fid } => {
-                buf.put_u8(MessageType::Tclunk as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-            }
-            Message::Rclunk { tag } => {
-                buf.put_u8(MessageType::Rclunk as u8);
-                buf.put_u16_le(*tag);
-            }
-            Message::Tremove { tag, fid } => {
-                buf.put_u8(MessageType::Tremove as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-            }
-            Message::Rremove { tag } => {
-                buf.put_u8(MessageType::Rremove as u8);
-                buf.put_u16_le(*tag);
-            }
-            Message::Tstat { tag, fid } => {
-                buf.put_u8(MessageType::Tstat as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-            }
-            Message::Rstat { tag, stat } => {
-                buf.put_u8(MessageType::Rstat as u8);
-                buf.put_u16_le(*tag);
-
-                // reserve space for stat size
-                let stat_start = buf.len();
-                buf.put_u16_le(0);
-
-                // encode stat structure
-                encode_stat(buf, stat);
-
-                // update size field
-                let stat_size = buf.len() - stat_start - 2;
-                let size_bytes = (stat_size as u16).to_le_bytes();
-                buf[stat_start..stat_start + 2].copy_from_slice(&size_bytes);
-            }
-            Message::Twstat { tag, fid, stat } => {
-                buf.put_u8(MessageType::Twstat as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-
-                // reserve space for stat size
-                let stat_start = buf.len();
-                buf.put_u16_le(0);
-
-                // encode stat structure
-                encode_stat(buf, stat);
-
-                // update size field
-                let stat_size = buf.len() - stat_start - 2;
-                let size_bytes = (stat_size as u16).to_le_bytes();
-                buf[stat_start..stat_start + 2].copy_from_slice(&size_bytes);
-            }
-            Message::Rwstat { tag } => {
-                buf.put_u8(MessageType::Rwstat as u8);
-                buf.put_u16_le(*tag);
-            }
-            Message::Topenfd { tag, fid, mode } => {
-                buf.put_u8(MessageType::Topenfd as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-                buf.put_u8(*mode);
-            }
-            Message::Ropenfd {
-                tag,
-                qid,
-                iounit,
-                fd,
-            } => {
-                buf.put_u8(MessageType::Ropenfd as u8);
-                buf.put_u16_le(*tag);
-                encode_qid(buf, qid);
-                buf.put_u32_le(*iounit);
-                buf.put_u32_le(*fd);
-            }
-            // 9P2000.L specific message encoding
-            Message::Tlopen { tag, fid, flags } => {
-                buf.put_u8(MessageType::Tlopen as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-                buf.put_u32_le(*flags);
-            }
-            Message::Rlopen { tag, qid, iounit } => {
-                buf.put_u8(MessageType::Rlopen as u8);
-                buf.put_u16_le(*tag);
-                encode_qid(buf, qid);
-                buf.put_u32_le(*iounit);
-            }
-            Message::Tlcreate {
-                tag,
-                fid,
-                name,
-                flags,
-                mode,
-                gid,
-            } => {
-                buf.put_u8(MessageType::Tlcreate as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-                encode_string(buf, name);
-                buf.put_u32_le(*flags);
-                buf.put_u32_le(*mode);
-                buf.put_u32_le(*gid);
-            }
-            Message::Rlcreate { tag, qid, iounit } => {
-                buf.put_u8(MessageType::Rlcreate as u8);
-                buf.put_u16_le(*tag);
-                encode_qid(buf, qid);
-                buf.put_u32_le(*iounit);
-            }
-            Message::Tsymlink {
-                tag,
-                fid,
-                name,
-                symtgt,
-                gid,
-            } => {
-                buf.put_u8(MessageType::Tsymlink as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-                encode_string(buf, name);
-                encode_string(buf, symtgt);
-                buf.put_u32_le(*gid);
-            }
-            Message::Rsymlink { tag, qid } => {
-                buf.put_u8(MessageType::Rsymlink as u8);
-                buf.put_u16_le(*tag);
-                encode_qid(buf, qid);
-            }
-            Message::Tmknod {
-                tag,
-                dfid,
-                name,
-                mode,
-                major,
-                minor,
-                gid,
-            } => {
-                buf.put_u8(MessageType::Tmknod as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*dfid);
-                encode_string(buf, name);
-                buf.put_u32_le(*mode);
-                buf.put_u32_le(*major);
-                buf.put_u32_le(*minor);
-                buf.put_u32_le(*gid);
-            }
-            Message::Rmknod { tag, qid } => {
-                buf.put_u8(MessageType::Rmknod as u8);
-                buf.put_u16_le(*tag);
-                encode_qid(buf, qid);
-            }
-            Message::Trename {
-                tag,
-                fid,
-                dfid,
-                name,
-            } => {
-                buf.put_u8(MessageType::Trename as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-                buf.put_u32_le(*dfid);
-                encode_string(buf, name);
-            }
-            Message::Rrename { tag } => {
-                buf.put_u8(MessageType::Rrename as u8);
-                buf.put_u16_le(*tag);
-            }
-            Message::Treadlink { tag, fid } => {
-                buf.put_u8(MessageType::Treadlink as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-            }
-            Message::Rreadlink { tag, target } => {
-                buf.put_u8(MessageType::Rreadlink as u8);
-                buf.put_u16_le(*tag);
-                encode_string(buf, target);
-            }
-            Message::Tgetattr {
-                tag,
-                fid,
-                request_mask,
-            } => {
-                buf.put_u8(MessageType::Tgetattr as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-                buf.put_u64_le(*request_mask);
-            }
-            Message::Rgetattr {
-                tag,
-                valid,
-                qid,
-                mode,
-                uid,
-                gid,
-                nlink,
-                rdev,
-                size,
-                blksize,
-                blocks,
-                atime_sec,
-                atime_nsec,
-                mtime_sec,
-                mtime_nsec,
-                ctime_sec,
-                ctime_nsec,
-                btime_sec,
-                btime_nsec,
-                gen,
-                data_version,
-            } => {
-                buf.put_u8(MessageType::Rgetattr as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u64_le(*valid);
-
-                // Encode qid (13 bytes)
-                buf.put_u8(qid.qtype);
-                buf.put_u32_le(qid.version);
-                buf.put_u64_le(qid.path);
-
-                // Encode remaining attributes
-                buf.put_u32_le(*mode);
-                buf.put_u32_le(*uid);
-                buf.put_u32_le(*gid);
-                buf.put_u64_le(*nlink);
-                buf.put_u64_le(*rdev);
-                buf.put_u64_le(*size);
-                buf.put_u64_le(*blksize);
-                buf.put_u64_le(*blocks);
-                buf.put_u64_le(*atime_sec);
-                buf.put_u64_le(*atime_nsec);
-                buf.put_u64_le(*mtime_sec);
-                buf.put_u64_le(*mtime_nsec);
-                buf.put_u64_le(*ctime_sec);
-                buf.put_u64_le(*ctime_nsec);
-                buf.put_u64_le(*btime_sec);
-                buf.put_u64_le(*btime_nsec);
-                buf.put_u64_le(*gen);
-                buf.put_u64_le(*data_version);
-            }
-            Message::Tsetattr {
-                tag,
-                fid,
-                valid,
-                mode,
-                uid,
-                gid,
-                size,
-                atime_sec,
-                atime_nsec,
-                mtime_sec,
-                mtime_nsec,
-            } => {
-                buf.put_u8(MessageType::Tsetattr as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-                buf.put_u32_le(*valid);
-                buf.put_u32_le(*mode);
-                buf.put_u32_le(*uid);
-                buf.put_u32_le(*gid);
-                buf.put_u64_le(*size);
-                buf.put_u64_le(*atime_sec);
-                buf.put_u64_le(*atime_nsec);
-                buf.put_u64_le(*mtime_sec);
-                buf.put_u64_le(*mtime_nsec);
-            }
-            Message::Rsetattr { tag } => {
-                buf.put_u8(MessageType::Rsetattr as u8);
-                buf.put_u16_le(*tag);
-            }
-            Message::Txattrwalk {
-                tag,
-                fid,
-                newfid,
-                name,
-            } => {
-                buf.put_u8(MessageType::Txattrwalk as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-                buf.put_u32_le(*newfid);
-                encode_string(buf, name);
-            }
-            Message::Rxattrwalk { tag, size } => {
-                buf.put_u8(MessageType::Rxattrwalk as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u64_le(*size);
-            }
-            Message::Txattrcreate {
-                tag,
-                fid,
-                name,
-                attr_size,
-                flags,
-            } => {
-                buf.put_u8(MessageType::Txattrcreate as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-                encode_string(buf, name);
-                buf.put_u64_le(*attr_size);
-                buf.put_u32_le(*flags);
-            }
-            Message::Rxattrcreate { tag } => {
-                buf.put_u8(MessageType::Rxattrcreate as u8);
-                buf.put_u16_le(*tag);
-            }
-            Message::Treaddir {
-                tag,
-                fid,
-                offset,
-                count,
-            } => {
-                buf.put_u8(MessageType::Treaddir as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-                buf.put_u64_le(*offset);
-                buf.put_u32_le(*count);
-            }
-            Message::Rreaddir { tag, data } => {
-                buf.put_u8(MessageType::Rreaddir as u8);
-                buf.put_u16_le(*tag);
-
-                // Reserve space for data size
-                let count_pos = buf.len();
-                buf.put_u32_le(0);
-
-                // Encode all directory entries
-                let start_pos = buf.len();
-                for entry in data {
-                    encode_dirent(buf, entry);
-                }
-
-                // Update count field
-                let count = (buf.len() - start_pos) as u32;
-                let count_bytes = count.to_le_bytes();
-                buf[count_pos..count_pos + 4].copy_from_slice(&count_bytes);
-            }
-            Message::Tfsync { tag, fid } => {
-                buf.put_u8(MessageType::Tfsync as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-            }
-            Message::Rfsync { tag } => {
-                buf.put_u8(MessageType::Rfsync as u8);
-                buf.put_u16_le(*tag);
-            }
-            Message::Tlock { tag, fid, lock } => {
-                buf.put_u8(MessageType::Tlock as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-                encode_lock(buf, lock);
-            }
-            Message::Rlock { tag, status } => {
-                buf.put_u8(MessageType::Rlock as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u8(*status);
-            }
-            Message::Tgetlock { tag, fid, lock } => {
-                buf.put_u8(MessageType::Tgetlock as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-                encode_lock(buf, lock);
-            }
-            Message::Rgetlock { tag, lock } => {
-                buf.put_u8(MessageType::Rgetlock as u8);
-                buf.put_u16_le(*tag);
-                encode_lock(buf, lock);
-            }
-            Message::Tlink {
-                tag,
-                dfid,
-                fid,
-                name,
-            } => {
-                buf.put_u8(MessageType::Tlink as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*dfid);
-                buf.put_u32_le(*fid);
-                encode_string(buf, name);
-            }
-            Message::Rlink { tag } => {
-                buf.put_u8(MessageType::Rlink as u8);
-                buf.put_u16_le(*tag);
-            }
-            Message::Tmkdir {
-                tag,
-                dfid,
-                name,
-                mode,
-                gid,
-            } => {
-                buf.put_u8(MessageType::Tmkdir as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*dfid);
-                encode_string(buf, name);
-                buf.put_u32_le(*mode);
-                buf.put_u32_le(*gid);
-            }
-            Message::Rmkdir { tag, qid } => {
-                buf.put_u8(MessageType::Rmkdir as u8);
-                buf.put_u16_le(*tag);
-                encode_qid(buf, qid);
-            }
-            Message::Trenameat {
-                tag,
-                olddirfid,
-                oldname,
-                newdirfid,
-                newname,
-            } => {
-                buf.put_u8(MessageType::Trenameat as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*olddirfid);
-                encode_string(buf, oldname);
-                buf.put_u32_le(*newdirfid);
-                encode_string(buf, newname);
-            }
-            Message::Rrenameat { tag } => {
-                buf.put_u8(MessageType::Rrenameat as u8);
-                buf.put_u16_le(*tag);
-            }
-            Message::Tunlinkat {
-                tag,
-                dirfid,
-                name,
-                flags,
-            } => {
-                buf.put_u8(MessageType::Tunlinkat as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*dirfid);
-                encode_string(buf, name);
-                buf.put_u32_le(*flags);
-            }
-            Message::Runlinkat { tag } => {
-                buf.put_u8(MessageType::Runlinkat as u8);
-                buf.put_u16_le(*tag);
-            }
-            Message::Tstatfs { tag, fid } => {
-                buf.put_u8(MessageType::Tstatfs as u8);
-                buf.put_u16_le(*tag);
-                buf.put_u32_le(*fid);
-            }
-            Message::Rstatfs { tag, statfs } => {
-                buf.put_u8(MessageType::Rstatfs as u8);
-                buf.put_u16_le(*tag);
-                encode_statfs(buf, statfs);
-            }
+            Message::Tlink(m) => m.encode_bytes(buf),
+            Message::Rlink(m) => m.encode_bytes(buf),
+            Message::Tstatfs(m) => m.encode_bytes(buf),
+            Message::Rstatfs(m) => m.encode_bytes(buf),
+            Message::Rversion(m) => m.encode_bytes(buf),
+            Message::Tversion(m) => m.encode_bytes(buf),
+            Message::Rversion(m) => m.encode_bytes(buf),
+            Message::Tauth(m) => m.encode_bytes(buf),
+            Message::Rauth(m) => m.encode_bytes(buf),
+            Message::Tattach(m) => m.encode_bytes(buf),
+            Message::Rattach(m) => m.encode_bytes(buf),
+            Message::Tflush(m) => m.encode_bytes(buf),
+            Message::Rflush(m) => m.encode_bytes(buf),
+            Message::Twalk(m) => m.encode_bytes(buf),
+            Message::Rwalk(m) => m.encode_bytes(buf),
+            Message::Tlopen(m) => m.encode_bytes(buf),
+            Message::Rlopen(m) => m.encode_bytes(buf),
+            Message::Tlcreate(m) => m.encode_bytes(buf),
+            Message::Rlcreate(m) => m.encode_bytes(buf),
+            Message::Tread(m) => m.encode_bytes(buf),
+            Message::Rread(m) => m.encode_bytes(buf),
+            Message::Twrite(m) => m.encode_bytes(buf),
+            Message::Rwrite(m) => m.encode_bytes(buf),
+            Message::Tclunk(m) => m.encode_bytes(buf),
+            Message::Rclunk(m) => m.encode_bytes(buf),
+            Message::Tremove(m) => m.encode_bytes(buf),
+            Message::Rremove(m) => m.encode_bytes(buf),
+            Message::Tstat(m) => m.encode_bytes(buf),
+            Message::Rstat(m) => m.encode_bytes(buf),
+            Message::Twstat(m) => m.encode_bytes(buf),
+            Message::Rwstat(m) => m.encode_bytes(buf),
+            Message::Treadlink(m) => m.encode_bytes(buf),
+            Message::Rreadlink(m) => m.encode_bytes(buf),
+            Message::Tgetattr(m) => m.encode_bytes(buf),
+            Message::Rgetattr(m) => m.encode_bytes(buf),
+            Message::Tsetattr(m) => m.encode_bytes(buf),
+            Message::Rsetattr(m) => m.encode_bytes(buf),
+            Message::Txattrwalk(m) => m.encode_bytes(buf),
+            Message::Rxattrwalk(m) => m.encode_bytes(buf),
+            Message::Txattrcreate(m) => m.encode_bytes(buf),
+            Message::Rxattrcreate(m) => m.encode_bytes(buf),
+            Message::Treaddir(m) => m.encode_bytes(buf),
+            Message::Rreaddir(m) => m.encode_bytes(buf),
+            Message::Tfsync(m) => m.encode_bytes(buf),
+            Message::Rfsync(m) => m.encode_bytes(buf),
+            Message::Tlock(m) => m.encode_bytes(buf),
+            Message::Rlock(m) => m.encode_bytes(buf),
+            Message::Tgetlock(m) => m.encode_bytes(buf),
+            Message::Rgetlock(m) => m.encode_bytes(buf),
+            Message::Tmkdir(m) => m.encode_bytes(buf),
+            Message::Rmkdir(m) => m.encode_bytes(buf),
+            Message::Trename(m) => m.encode_bytes(buf),
+            Message::Rrename(m) => m.encode_bytes(buf),
+            Message::Trenameat(m) => m.encode_bytes(buf),
+            Message::Rrenameat(m) => m.encode_bytes(buf),
+            Message::Tunlinkat(m) => m.encode_bytes(buf),
+            Message::Runlinkat(m) => m.encode_bytes(buf),
+            Message::Tsymlink(m) => m.encode_bytes(buf),
+            Message::Rsymlink(m) => m.encode_bytes(buf),
+            Message::Tmknod(m) => m.encode_bytes(buf),
+            Message::Rmknod(m) => m.encode_bytes(buf),
+            Message::Rlerror(m) => m.encode_bytes(buf),
         }
     }
 
     pub fn decode(buf: &mut BytesMut) -> Result<Self> {
         if buf.len() < 3 {
-            return Err(Error::BufferTooShort);
+            println!("decode: too small");
+            return Err(Error::BufferTooSmall);
         }
 
         let typ = buf.get_u8();
-        let tag = buf.get_u16_le();
-        println!("type: {typ}");
-        println!("tag: {tag}");
+        // we don't consume the tag here since each DecodeBytes implementation will read it
 
         match MessageType::try_from(typ) {
-            Ok(MessageType::Tversion) => {
-                let msize = buf.get_u32_le();
-                let version = decode_string(buf)?;
-                Ok(Message::Tversion {
-                    tag,
-                    msize,
-                    version,
-                })
-            }
-            Ok(MessageType::Rversion) => {
-                let msize = buf.get_u32_le();
-                let version = decode_string(buf)?;
-                Ok(Message::Rversion {
-                    tag,
-                    msize,
-                    version,
-                })
-            }
-            Ok(MessageType::Tauth) => {
-                let afid = buf.get_u32_le();
-                let uname = decode_string(buf)?;
-                let aname = decode_string(buf)?;
-                Ok(Message::Tauth {
-                    tag,
-                    afid,
-                    uname,
-                    aname,
-                })
-            }
-            Ok(MessageType::Rauth) => {
-                let aqid = decode_qid(buf)?;
-                Ok(Message::Rauth { tag, aqid })
-            }
-            Ok(MessageType::Tattach) => {
-                let fid = buf.get_u32_le();
-                let afid = buf.get_u32_le();
-                let uname = decode_string(buf)?;
-                let aname = decode_string(buf)?;
-                Ok(Message::Tattach {
-                    tag,
-                    fid,
-                    afid,
-                    uname,
-                    aname,
-                })
-            }
-            Ok(MessageType::Rattach) => {
-                let qid = decode_qid(buf)?;
-                Ok(Message::Rattach { tag, qid })
-            }
-            Ok(MessageType::Rerror) => {
-                let ename = decode_string(buf)?;
-                Ok(Message::Rerror { tag, ename })
-            }
-            Ok(MessageType::Rlerror) => {
-                let ecode = buf.get_u32_le();
-                Ok(Message::Rlerror { tag, ecode })
-            }
-            Ok(MessageType::Tflush) => {
-                let oldtag = buf.get_u16_le();
-                Ok(Message::Tflush { tag, oldtag })
-            }
-            Ok(MessageType::Rflush) => Ok(Message::Rflush { tag }),
-            Ok(MessageType::Twalk) => {
-                let fid = buf.get_u32_le();
-                let newfid = buf.get_u32_le();
-                let nwname = buf.get_u16_le() as usize;
+            Ok(MessageType::Tversion) => Ok(Message::Tversion(Tversion::decode_bytes(buf)?)),
+            Ok(MessageType::Rversion) => Ok(Message::Rversion(Rversion::decode_bytes(buf)?)),
+            Ok(MessageType::Tauth) => Ok(Message::Tauth(Tauth::decode_bytes(buf)?)),
+            Ok(MessageType::Rauth) => Ok(Message::Rauth(Rauth::decode_bytes(buf)?)),
+            Ok(MessageType::Tattach) => Ok(Message::Tattach(Tattach::decode_bytes(buf)?)),
+            Ok(MessageType::Rattach) => Ok(Message::Rattach(Rattach::decode_bytes(buf)?)),
+            Ok(MessageType::Tflush) => Ok(Message::Tflush(Tflush::decode_bytes(buf)?)),
+            Ok(MessageType::Rflush) => Ok(Message::Rflush(Rflush::decode_bytes(buf)?)),
+            Ok(MessageType::Twalk) => Ok(Message::Twalk(Twalk::decode_bytes(buf)?)),
+            Ok(MessageType::Rwalk) => Ok(Message::Rwalk(Rwalk::decode_bytes(buf)?)),
+            Ok(MessageType::Tread) => Ok(Message::Tread(Tread::decode_bytes(buf)?)),
+            Ok(MessageType::Rread) => Ok(Message::Rread(Rread::decode_bytes(buf)?)),
+            Ok(MessageType::Twrite) => Ok(Message::Twrite(Twrite::decode_bytes(buf)?)),
+            Ok(MessageType::Rwrite) => Ok(Message::Rwrite(Rwrite::decode_bytes(buf)?)),
+            Ok(MessageType::Tclunk) => Ok(Message::Tclunk(Tclunk::decode_bytes(buf)?)),
+            Ok(MessageType::Rclunk) => Ok(Message::Rclunk(Rclunk::decode_bytes(buf)?)),
+            Ok(MessageType::Tremove) => Ok(Message::Tremove(Tremove::decode_bytes(buf)?)),
+            Ok(MessageType::Rremove) => Ok(Message::Rremove(Rremove::decode_bytes(buf)?)),
 
-                let mut wnames = Vec::with_capacity(nwname);
-                for _ in 0..nwname {
-                    wnames.push(decode_string(buf)?);
-                }
-
-                Ok(Message::Twalk {
-                    tag,
-                    fid,
-                    newfid,
-                    wnames,
-                })
-            }
-            Ok(MessageType::Rwalk) => {
-                let nwqid = buf.get_u16_le() as usize;
-
-                let mut wqids = Vec::with_capacity(nwqid);
-                for _ in 0..nwqid {
-                    wqids.push(decode_qid(buf)?);
-                }
-
-                Ok(Message::Rwalk { tag, wqids })
-            }
-            Ok(MessageType::Topen) => {
-                let fid = buf.get_u32_le();
-                let mode = buf.get_u8();
-                Ok(Message::Topen { tag, fid, mode })
-            }
-            Ok(MessageType::Ropen) => {
-                let qid = decode_qid(buf)?;
-                let iounit = buf.get_u32_le();
-                Ok(Message::Ropen { tag, qid, iounit })
-            }
-            Ok(MessageType::Tcreate) => {
-                let fid = buf.get_u32_le();
-                let name = decode_string(buf)?;
-                let perm = buf.get_u32_le();
-                let mode = buf.get_u8();
-                Ok(Message::Tcreate {
-                    tag,
-                    fid,
-                    name,
-                    perm,
-                    mode,
-                })
-            }
-            Ok(MessageType::Rcreate) => {
-                let qid = decode_qid(buf)?;
-                let iounit = buf.get_u32_le();
-                Ok(Message::Rcreate { tag, qid, iounit })
-            }
-            Ok(MessageType::Tread) => {
-                let fid = buf.get_u32_le();
-                let offset = buf.get_u64_le();
-                let count = buf.get_u32_le();
-                Ok(Message::Tread {
-                    tag,
-                    fid,
-                    offset,
-                    count,
-                })
-            }
-            Ok(MessageType::Rread) => {
-                let count = buf.get_u32_le() as usize;
-                if buf.len() < count {
-                    return Err(Error::BufferTooShort);
-                }
-
-                let data = buf.split_to(count).to_vec();
-                Ok(Message::Rread { tag, data })
-            }
-            Ok(MessageType::Twrite) => {
-                let fid = buf.get_u32_le();
-                let offset = buf.get_u64_le();
-                let count = buf.get_u32_le() as usize;
-
-                if buf.len() < count {
-                    return Err(Error::BufferTooShort);
-                }
-
-                let data = buf.split_to(count).to_vec();
-                Ok(Message::Twrite {
-                    tag,
-                    fid,
-                    offset,
-                    data,
-                })
-            }
-            Ok(MessageType::Rwrite) => {
-                let count = buf.get_u32_le();
-                Ok(Message::Rwrite { tag, count })
-            }
-            Ok(MessageType::Tclunk) => {
-                let fid = buf.get_u32_le();
-                Ok(Message::Tclunk { tag, fid })
-            }
-            Ok(MessageType::Rclunk) => Ok(Message::Rclunk { tag }),
-            Ok(MessageType::Tremove) => {
-                let fid = buf.get_u32_le();
-                Ok(Message::Tremove { tag, fid })
-            }
-            Ok(MessageType::Rremove) => Ok(Message::Rremove { tag }),
-            Ok(MessageType::Tstat) => {
-                let fid = buf.get_u32_le();
-                Ok(Message::Tstat { tag, fid })
-            }
-            Ok(MessageType::Rstat) => {
-                // Skip the stat size field since we decode the entire structure
-                let _stat_size = buf.get_u16_le();
-                let stat = decode_stat(buf)?;
-                Ok(Message::Rstat { tag, stat })
-            }
-            Ok(MessageType::Twstat) => {
-                let fid = buf.get_u32_le();
-                // Skip the stat size field
-                let _stat_size = buf.get_u16_le();
-                let stat = decode_stat(buf)?;
-                Ok(Message::Twstat { tag, fid, stat })
-            }
-            Ok(MessageType::Rwstat) => Ok(Message::Rwstat { tag }),
-            Ok(MessageType::Topenfd) => {
-                let fid = buf.get_u32_le();
-                let mode = buf.get_u8();
-                Ok(Message::Topenfd { tag, fid, mode })
-            }
-            Ok(MessageType::Ropenfd) => {
-                let qid = decode_qid(buf)?;
-                let iounit = buf.get_u32_le();
-                let fd = buf.get_u32_le();
-                Ok(Message::Ropenfd {
-                    tag,
-                    qid,
-                    iounit,
-                    fd,
-                })
-            }
-            // 9P2000.L specific message decoding
-            Ok(MessageType::Tlopen) => {
-                let fid = buf.get_u32_le();
-                let flags = buf.get_u32_le();
-                Ok(Message::Tlopen { tag, fid, flags })
-            }
-            Ok(MessageType::Rlopen) => {
-                let qid = decode_qid(buf)?;
-                let iounit = buf.get_u32_le();
-                Ok(Message::Rlopen { tag, qid, iounit })
-            }
-            Ok(MessageType::Tlcreate) => {
-                let fid = buf.get_u32_le();
-                let name = decode_string(buf)?;
-                let flags = buf.get_u32_le();
-                let mode = buf.get_u32_le();
-                let gid = buf.get_u32_le();
-                Ok(Message::Tlcreate {
-                    tag,
-                    fid,
-                    name,
-                    flags,
-                    mode,
-                    gid,
-                })
-            }
-            Ok(MessageType::Rlcreate) => {
-                let qid = decode_qid(buf)?;
-                let iounit = buf.get_u32_le();
-                Ok(Message::Rlcreate { tag, qid, iounit })
-            }
-            Ok(MessageType::Tsymlink) => {
-                let fid = buf.get_u32_le();
-                let name = decode_string(buf)?;
-                let symtgt = decode_string(buf)?;
-                let gid = buf.get_u32_le();
-                Ok(Message::Tsymlink {
-                    tag,
-                    fid,
-                    name,
-                    symtgt,
-                    gid,
-                })
-            }
-            Ok(MessageType::Rsymlink) => {
-                let qid = decode_qid(buf)?;
-                Ok(Message::Rsymlink { tag, qid })
-            }
-            Ok(MessageType::Tmknod) => {
-                let dfid = buf.get_u32_le();
-                let name = decode_string(buf)?;
-                let mode = buf.get_u32_le();
-                let major = buf.get_u32_le();
-                let minor = buf.get_u32_le();
-                let gid = buf.get_u32_le();
-                Ok(Message::Tmknod {
-                    tag,
-                    dfid,
-                    name,
-                    mode,
-                    major,
-                    minor,
-                    gid,
-                })
-            }
-            Ok(MessageType::Rmknod) => {
-                let qid = decode_qid(buf)?;
-                Ok(Message::Rmknod { tag, qid })
-            }
-            Ok(MessageType::Trename) => {
-                let fid = buf.get_u32_le();
-                let dfid = buf.get_u32_le();
-                let name = decode_string(buf)?;
-                Ok(Message::Trename {
-                    tag,
-                    fid,
-                    dfid,
-                    name,
-                })
-            }
-            Ok(MessageType::Rrename) => Ok(Message::Rrename { tag }),
-            Ok(MessageType::Treadlink) => {
-                let fid = buf.get_u32_le();
-                Ok(Message::Treadlink { tag, fid })
-            }
-            Ok(MessageType::Rreadlink) => {
-                let target = decode_string(buf)?;
-                Ok(Message::Rreadlink { tag, target })
-            }
-            Ok(MessageType::Tgetattr) => {
-                let fid = buf.get_u32_le();
-                let request_mask = buf.get_u64_le();
-                Ok(Message::Tgetattr {
-                    tag,
-                    fid,
-                    request_mask,
-                })
-            }
-            Ok(MessageType::Rgetattr) => {
-                let valid = buf.get_u64_le();
-
-                // Decode qid (13 bytes)
-                let qid_type = buf.get_u8();
-                let qid_version = buf.get_u32_le();
-                let qid_path = buf.get_u64_le();
-                let qid = Qid {
-                    qtype: qid_type,
-                    version: qid_version,
-                    path: qid_path,
-                };
-
-                // Decode remaining attributes
-                let mode = buf.get_u32_le();
-                let uid = buf.get_u32_le();
-                let gid = buf.get_u32_le();
-                let nlink = buf.get_u64_le();
-                let rdev = buf.get_u64_le();
-                let size = buf.get_u64_le();
-                let blksize = buf.get_u64_le();
-                let blocks = buf.get_u64_le();
-                let atime_sec = buf.get_u64_le();
-                let atime_nsec = buf.get_u64_le();
-                let mtime_sec = buf.get_u64_le();
-                let mtime_nsec = buf.get_u64_le();
-                let ctime_sec = buf.get_u64_le();
-                let ctime_nsec = buf.get_u64_le();
-                let btime_sec = buf.get_u64_le();
-                let btime_nsec = buf.get_u64_le();
-                let gen = buf.get_u64_le();
-                let data_version = buf.get_u64_le();
-
-                Ok(Message::Rgetattr {
-                    tag,
-                    valid,
-                    qid,
-                    mode,
-                    uid,
-                    gid,
-                    nlink,
-                    rdev,
-                    size,
-                    blksize: 4096, // Default block size, you can adjust as needed
-                    blocks,
-                    atime_sec,
-                    atime_nsec,
-                    mtime_sec,
-                    mtime_nsec,
-                    ctime_sec,
-                    ctime_nsec,
-                    btime_sec,
-                    btime_nsec,
-                    gen,
-                    data_version,
-                })
-            }
-            Ok(MessageType::Tsetattr) => {
-                let fid = buf.get_u32_le();
-                let valid = buf.get_u32_le();
-                let mode = buf.get_u32_le();
-                let uid = buf.get_u32_le();
-                let gid = buf.get_u32_le();
-                let size = buf.get_u64_le();
-                let atime_sec = buf.get_u64_le();
-                let atime_nsec = buf.get_u64_le();
-                let mtime_sec = buf.get_u64_le();
-                let mtime_nsec = buf.get_u64_le();
-                Ok(Message::Tsetattr {
-                    tag,
-                    fid,
-                    valid,
-                    mode,
-                    uid,
-                    gid,
-                    size,
-                    atime_sec,
-                    atime_nsec,
-                    mtime_sec,
-                    mtime_nsec,
-                })
-            }
-            Ok(MessageType::Rsetattr) => Ok(Message::Rsetattr { tag }),
-            Ok(MessageType::Txattrwalk) => {
-                let fid = buf.get_u32_le();
-                let newfid = buf.get_u32_le();
-                let name = decode_string(buf)?;
-                Ok(Message::Txattrwalk {
-                    tag,
-                    fid,
-                    newfid,
-                    name,
-                })
-            }
-            Ok(MessageType::Rxattrwalk) => {
-                let size = buf.get_u64_le();
-                Ok(Message::Rxattrwalk { tag, size })
-            }
+            // Linux-specific message types
+            Ok(MessageType::Tgetattr) => Ok(Message::Tgetattr(Tgetattr::decode_bytes(buf)?)),
+            Ok(MessageType::Rgetattr) => Ok(Message::Rgetattr(Rgetattr::decode_bytes(buf)?)),
+            Ok(MessageType::Tsetattr) => Ok(Message::Tsetattr(Tsetattr::decode_bytes(buf)?)),
+            Ok(MessageType::Rsetattr) => Ok(Message::Rsetattr(Rsetattr::decode_bytes(buf)?)),
+            Ok(MessageType::Txattrwalk) => Ok(Message::Txattrwalk(Txattrwalk::decode_bytes(buf)?)),
+            Ok(MessageType::Rxattrwalk) => Ok(Message::Rxattrwalk(Rxattrwalk::decode_bytes(buf)?)),
             Ok(MessageType::Txattrcreate) => {
-                let fid = buf.get_u32_le();
-                let name = decode_string(buf)?;
-                let attr_size = buf.get_u64_le();
-                let flags = buf.get_u32_le();
-                Ok(Message::Txattrcreate {
-                    tag,
-                    fid,
-                    name,
-                    attr_size,
-                    flags,
-                })
+                Ok(Message::Txattrcreate(Txattrcreate::decode_bytes(buf)?))
             }
-            Ok(MessageType::Rxattrcreate) => Ok(Message::Rxattrcreate { tag }),
-            Ok(MessageType::Treaddir) => {
-                let fid = buf.get_u32_le();
-                let offset = buf.get_u64_le();
-                let count = buf.get_u32_le();
-                Ok(Message::Treaddir {
-                    tag,
-                    fid,
-                    offset,
-                    count,
-                })
+            Ok(MessageType::Rxattrcreate) => {
+                Ok(Message::Rxattrcreate(Rxattrcreate::decode_bytes(buf)?))
             }
-            Ok(MessageType::Rreaddir) => {
-                let count = buf.get_u32_le() as usize;
-                if buf.len() < count {
-                    return Err(Error::BufferTooShort);
-                }
+            Ok(MessageType::Treaddir) => Ok(Message::Treaddir(Treaddir::decode_bytes(buf)?)),
+            Ok(MessageType::Rreaddir) => Ok(Message::Rreaddir(Rreaddir::decode_bytes(buf)?)),
+            Ok(MessageType::Tfsync) => Ok(Message::Tfsync(Tfsync::decode_bytes(buf)?)),
+            Ok(MessageType::Rfsync) => Ok(Message::Rfsync(Rfsync::decode_bytes(buf)?)),
+            Ok(MessageType::Tlock) => Ok(Message::Tlock(Tlock::decode_bytes(buf)?)),
+            Ok(MessageType::Rlock) => Ok(Message::Rlock(Rlock::decode_bytes(buf)?)),
+            Ok(MessageType::Tgetlock) => Ok(Message::Tgetlock(Tgetlock::decode_bytes(buf)?)),
+            Ok(MessageType::Rgetlock) => Ok(Message::Rgetlock(Rgetlock::decode_bytes(buf)?)),
+            Ok(MessageType::Tmkdir) => Ok(Message::Tmkdir(Tmkdir::decode_bytes(buf)?)),
+            Ok(MessageType::Rmkdir) => Ok(Message::Rmkdir(Rmkdir::decode_bytes(buf)?)),
+            Ok(MessageType::Trename) => Ok(Message::Trename(Trename::decode_bytes(buf)?)),
+            Ok(MessageType::Rrename) => Ok(Message::Rrename(Rrename::decode_bytes(buf)?)),
+            Ok(MessageType::Trenameat) => Ok(Message::Trenameat(Trenameat::decode_bytes(buf)?)),
+            Ok(MessageType::Rrenameat) => Ok(Message::Rrenameat(Rrenameat::decode_bytes(buf)?)),
+            Ok(MessageType::Tunlinkat) => Ok(Message::Tunlinkat(Tunlinkat::decode_bytes(buf)?)),
+            Ok(MessageType::Runlinkat) => Ok(Message::Runlinkat(Runlinkat::decode_bytes(buf)?)),
+            Ok(MessageType::Tsymlink) => Ok(Message::Tsymlink(Tsymlink::decode_bytes(buf)?)),
+            Ok(MessageType::Rsymlink) => Ok(Message::Rsymlink(Rsymlink::decode_bytes(buf)?)),
+            Ok(MessageType::Tmknod) => Ok(Message::Tmknod(Tmknod::decode_bytes(buf)?)),
+            Ok(MessageType::Rmknod) => Ok(Message::Rmknod(Rmknod::decode_bytes(buf)?)),
 
-                let mut entries_buf = buf.split_to(count);
-                let mut data = Vec::new();
+            // Error handling
+            Ok(MessageType::Rlerror) => Ok(Message::Rlerror(Rlerror::decode_bytes(buf)?)),
 
-                while !entries_buf.is_empty() {
-                    if let Ok(entry) = decode_dirent(&mut entries_buf) {
-                        data.push(entry);
-                    } else {
-                        return Err(Error::InvalidFormat);
-                    }
-                }
-
-                Ok(Message::Rreaddir { tag, data })
-            }
-            Ok(MessageType::Tfsync) => {
-                let fid = buf.get_u32_le();
-                Ok(Message::Tfsync { tag, fid })
-            }
-            Ok(MessageType::Rfsync) => Ok(Message::Rfsync { tag }),
-            Ok(MessageType::Tlock) => {
-                let fid = buf.get_u32_le();
-                let lock = decode_lock(buf)?;
-                Ok(Message::Tlock { tag, fid, lock })
-            }
-            Ok(MessageType::Rlock) => {
-                let status = buf.get_u8();
-                Ok(Message::Rlock { tag, status })
-            }
-            Ok(MessageType::Tgetlock) => {
-                let fid = buf.get_u32_le();
-                let lock = decode_lock(buf)?;
-                Ok(Message::Tgetlock { tag, fid, lock })
-            }
-            Ok(MessageType::Rgetlock) => {
-                let lock = decode_lock(buf)?;
-                Ok(Message::Rgetlock { tag, lock })
-            }
-            Ok(MessageType::Tlink) => {
-                let dfid = buf.get_u32_le();
-                let fid = buf.get_u32_le();
-                let name = decode_string(buf)?;
-                Ok(Message::Tlink {
-                    tag,
-                    dfid,
-                    fid,
-                    name,
-                })
-            }
-            Ok(MessageType::Rlink) => Ok(Message::Rlink { tag }),
-            Ok(MessageType::Tmkdir) => {
-                let dfid = buf.get_u32_le();
-                let name = decode_string(buf)?;
-                let mode = buf.get_u32_le();
-                let gid = buf.get_u32_le();
-                Ok(Message::Tmkdir {
-                    tag,
-                    dfid,
-                    name,
-                    mode,
-                    gid,
-                })
-            }
-            Ok(MessageType::Rmkdir) => {
-                let qid = decode_qid(buf)?;
-                Ok(Message::Rmkdir { tag, qid })
-            }
-            Ok(MessageType::Trenameat) => {
-                let olddirfid = buf.get_u32_le();
-                let oldname = decode_string(buf)?;
-                let newdirfid = buf.get_u32_le();
-                let newname = decode_string(buf)?;
-                Ok(Message::Trenameat {
-                    tag,
-                    olddirfid,
-                    oldname,
-                    newdirfid,
-                    newname,
-                })
-            }
-            Ok(MessageType::Rrenameat) => Ok(Message::Rrenameat { tag }),
-            Ok(MessageType::Tunlinkat) => {
-                let dirfid = buf.get_u32_le();
-                let name = decode_string(buf)?;
-                let flags = buf.get_u32_le();
-                Ok(Message::Tunlinkat {
-                    tag,
-                    dirfid,
-                    name,
-                    flags,
-                })
-            }
-            Ok(MessageType::Runlinkat) => Ok(Message::Runlinkat { tag }),
-            Ok(MessageType::Tstatfs) => {
-                let fid = buf.get_u32_le();
-                Ok(Message::Tstatfs { tag, fid })
-            }
-            Ok(MessageType::Rstatfs) => {
-                let statfs = decode_statfs(buf)?;
-                Ok(Message::Rstatfs { tag, statfs })
-            }
-            #[allow(deprecated)]
-            Ok(MessageType::Terror) => Err(Error::InvalidMessageType(MessageType::Terror as u8)),
-            Ok(MessageType::Tlerror) => Err(Error::InvalidMessageType(MessageType::Tlerror as u8)),
-            Err(e) => Err(e),
+            // Invalid message types
+            _ => Err(Error::InvalidMessageType(typ)),
         }
     }
-}
-
-fn encode_string(buf: &mut BytesMut, s: &str) {
-    let bytes = s.as_bytes();
-    buf.put_u16_le(bytes.len() as u16);
-    buf.put_slice(bytes);
-}
-
-fn decode_string(buf: &mut BytesMut) -> Result<String> {
-    if buf.len() < 2 {
-        return Err(Error::BufferTooShort);
-    }
-
-    let len = buf.get_u16_le() as usize;
-    if buf.len() < len {
-        return Err(Error::BufferTooShort);
-    }
-
-    let bytes = buf.split_to(len);
-    String::from_utf8(bytes.to_vec()).map_err(|_| Error::InvalidUtf8)
-}
-
-fn encode_qid(buf: &mut BytesMut, qid: &Qid) {
-    buf.put_u8(qid.qtype);
-    buf.put_u32_le(qid.version);
-    buf.put_u64_le(qid.path);
-}
-
-fn decode_qid(buf: &mut BytesMut) -> Result<Qid> {
-    if buf.len() < 13 {
-        // 1 + 4 + 8 bytes
-        return Err(Error::BufferTooShort);
-    }
-
-    let qtype = buf.get_u8();
-    let version = buf.get_u32_le();
-    let path = buf.get_u64_le();
-
-    Ok(Qid {
-        qtype,
-        version,
-        path,
-    })
-}
-
-fn encode_attr(buf: &mut BytesMut, attr: &Attr) {
-    buf.put_u32_le(attr.mode);
-    buf.put_u32_le(attr.uid);
-    buf.put_u32_le(attr.gid);
-    buf.put_u64_le(attr.nlink);
-    buf.put_u64_le(attr.rdev);
-    buf.put_u64_le(attr.size);
-    buf.put_u64_le(attr.blocks);
-    buf.put_u64_le(attr.atime_sec);
-    buf.put_u64_le(attr.atime_nsec);
-    buf.put_u64_le(attr.mtime_sec);
-    buf.put_u64_le(attr.mtime_nsec);
-    buf.put_u64_le(attr.ctime_sec);
-    buf.put_u64_le(attr.ctime_nsec);
-    buf.put_u64_le(attr.btime_sec);
-    buf.put_u64_le(attr.btime_nsec);
-    buf.put_u64_le(attr.gen);
-    buf.put_u64_le(attr.data_version);
-}
-
-fn decode_attr(buf: &mut BytesMut) -> Result<Attr> {
-    if buf.len() < 136 {
-        // 4*3 + 8*16 bytes
-        return Err(Error::BufferTooShort);
-    }
-
-    let mode = buf.get_u32_le();
-    let uid = buf.get_u32_le();
-    let gid = buf.get_u32_le();
-    let nlink = buf.get_u64_le();
-    let rdev = buf.get_u64_le();
-    let size = buf.get_u64_le();
-    let blocks = buf.get_u64_le();
-    let atime_sec = buf.get_u64_le();
-    let atime_nsec = buf.get_u64_le();
-    let mtime_sec = buf.get_u64_le();
-    let mtime_nsec = buf.get_u64_le();
-    let ctime_sec = buf.get_u64_le();
-    let ctime_nsec = buf.get_u64_le();
-    let btime_sec = buf.get_u64_le();
-    let btime_nsec = buf.get_u64_le();
-    let gen = buf.get_u64_le();
-    let data_version = buf.get_u64_le();
-
-    Ok(Attr {
-        valid: 0, // This is set from the message's valid field
-        mode,
-        uid,
-        gid,
-        nlink,
-        rdev,
-        size,
-        blocks,
-        atime_sec,
-        atime_nsec,
-        mtime_sec,
-        mtime_nsec,
-        ctime_sec,
-        ctime_nsec,
-        btime_sec,
-        btime_nsec,
-        gen,
-        data_version,
-    })
-}
-
-fn encode_dirent(buf: &mut BytesMut, dirent: &Dirent) {
-    encode_qid(buf, &dirent.qid);
-    buf.put_u64_le(dirent.offset);
-    buf.put_u8(dirent.dtype);
-    encode_string(buf, &dirent.name);
-}
-
-fn decode_dirent(buf: &mut BytesMut) -> Result<Dirent> {
-    if buf.len() < 13 + 8 + 1 {
-        // qid + offset + type
-        return Err(Error::BufferTooShort);
-    }
-
-    let qid = decode_qid(buf)?;
-    let offset = buf.get_u64_le();
-    let typ = buf.get_u8();
-    let name = decode_string(buf)?;
-
-    Ok(Dirent {
-        qid,
-        offset,
-        dtype: typ,
-        name,
-    })
-}
-
-fn encode_lock(buf: &mut BytesMut, lock: &Lock) {
-    buf.put_u8(lock.r#type);
-    buf.put_u32_le(lock.flags);
-    buf.put_u64_le(lock.start);
-    buf.put_u64_le(lock.length);
-    buf.put_u32_le(lock.proc_id);
-    encode_string(buf, &lock.client_id);
-}
-
-fn decode_lock(buf: &mut BytesMut) -> Result<Lock> {
-    if buf.len() < 1 + 4 + 8 + 8 + 4 {
-        // min size without client_id
-        return Err(Error::BufferTooShort);
-    }
-
-    let r#type = buf.get_u8();
-    let flags = buf.get_u32_le();
-    let start = buf.get_u64_le();
-    let length = buf.get_u64_le();
-    let proc_id = buf.get_u32_le();
-    let client_id = decode_string(buf)?;
-
-    Ok(Lock {
-        r#type,
-        flags,
-        start,
-        length,
-        proc_id,
-        client_id,
-    })
-}
-
-fn encode_statfs(buf: &mut BytesMut, statfs: &StatFs) {
-    buf.put_u32_le(statfs.r#type);
-    buf.put_u32_le(statfs.bsize);
-    buf.put_u64_le(statfs.blocks);
-    buf.put_u64_le(statfs.bfree);
-    buf.put_u64_le(statfs.bavail);
-    buf.put_u64_le(statfs.files);
-    buf.put_u64_le(statfs.ffree);
-    buf.put_u64_le(statfs.fsid);
-    buf.put_u32_le(statfs.namelen);
-}
-
-fn decode_statfs(buf: &mut BytesMut) -> Result<StatFs> {
-    if buf.len() < 8 + 48 + 4 {
-        // 2 u32s + 6 u64s + 1 u32
-        return Err(Error::BufferTooShort);
-    }
-
-    let r#type = buf.get_u32_le();
-    let bsize = buf.get_u32_le();
-    let blocks = buf.get_u64_le();
-    let bfree = buf.get_u64_le();
-    let bavail = buf.get_u64_le();
-    let files = buf.get_u64_le();
-    let ffree = buf.get_u64_le();
-    let fsid = buf.get_u64_le();
-    let namelen = buf.get_u32_le();
-
-    Ok(StatFs {
-        r#type,
-        bsize,
-        blocks,
-        bfree,
-        bavail,
-        files,
-        ffree,
-        fsid,
-        namelen,
-    })
-}
-
-fn encode_stat(buf: &mut BytesMut, stat: &Stat) {
-    buf.put_u16_le(stat.qtype);
-    buf.put_u32_le(stat.dev);
-    encode_qid(buf, &stat.qid);
-    buf.put_u32_le(stat.mode);
-    buf.put_u32_le(stat.atime);
-    buf.put_u32_le(stat.mtime);
-    buf.put_u64_le(stat.length);
-    encode_string(buf, &stat.name);
-    encode_string(buf, &stat.uid);
-    encode_string(buf, &stat.gid);
-    encode_string(buf, &stat.muid);
-}
-
-fn decode_stat(buf: &mut BytesMut) -> Result<Stat> {
-    if buf.len() < 2 + 4 + 13 + 4 + 4 + 4 + 8 {
-        // minimum size without strings
-        return Err(Error::BufferTooShort);
-    }
-
-    let qtype = buf.get_u16_le();
-    let dev = buf.get_u32_le();
-    let qid = decode_qid(buf)?;
-    let mode = buf.get_u32_le();
-    let atime = buf.get_u32_le();
-    let mtime = buf.get_u32_le();
-    let length = buf.get_u64_le();
-    let name = decode_string(buf)?;
-    let uid = decode_string(buf)?;
-    let gid = decode_string(buf)?;
-    let muid = decode_string(buf)?;
-
-    Ok(Stat {
-        qtype,
-        dev,
-        qid,
-        mode,
-        atime,
-        mtime,
-        length,
-        name,
-        uid,
-        gid,
-        muid,
-    })
 }
 
 impl TryFrom<u8> for MessageType {
@@ -2077,7 +484,6 @@ impl TryFrom<u8> for MessageType {
 
     fn try_from(value: u8) -> Result<Self> {
         match value {
-            // 9P2000.L specific message types
             6 => Ok(MessageType::Tlerror),
             7 => Ok(MessageType::Rlerror),
             8 => Ok(MessageType::Tstatfs),
@@ -2119,26 +525,16 @@ impl TryFrom<u8> for MessageType {
             76 => Ok(MessageType::Tunlinkat),
             77 => Ok(MessageType::Runlinkat),
 
-            // Classic 9P message types
-            98 => Ok(MessageType::Topenfd),
-            99 => Ok(MessageType::Ropenfd),
             100 => Ok(MessageType::Tversion),
             101 => Ok(MessageType::Rversion),
             102 => Ok(MessageType::Tauth),
             103 => Ok(MessageType::Rauth),
             104 => Ok(MessageType::Tattach),
             105 => Ok(MessageType::Rattach),
-            #[allow(deprecated)]
-            106 => Ok(MessageType::Terror),
-            107 => Ok(MessageType::Rerror),
             108 => Ok(MessageType::Tflush),
             109 => Ok(MessageType::Rflush),
             110 => Ok(MessageType::Twalk),
             111 => Ok(MessageType::Rwalk),
-            112 => Ok(MessageType::Topen),
-            113 => Ok(MessageType::Ropen),
-            114 => Ok(MessageType::Tcreate),
-            115 => Ok(MessageType::Rcreate),
             116 => Ok(MessageType::Tread),
             117 => Ok(MessageType::Rread),
             118 => Ok(MessageType::Twrite),
@@ -2147,10 +543,6 @@ impl TryFrom<u8> for MessageType {
             121 => Ok(MessageType::Rclunk),
             122 => Ok(MessageType::Tremove),
             123 => Ok(MessageType::Rremove),
-            124 => Ok(MessageType::Tstat),
-            125 => Ok(MessageType::Rstat),
-            126 => Ok(MessageType::Twstat),
-            127 => Ok(MessageType::Rwstat),
             _ => Err(Error::InvalidMessageType(value)),
         }
     }
@@ -2159,75 +551,755 @@ impl TryFrom<u8> for MessageType {
 impl Message {
     pub fn get_tag(&self) -> u16 {
         match self {
-            Message::Tversion { tag, .. }
-            | Message::Rversion { tag, .. }
-            | Message::Tauth { tag, .. }
-            | Message::Rauth { tag, .. }
-            | Message::Tattach { tag, .. }
-            | Message::Rattach { tag, .. }
-            | Message::Rerror { tag, .. }
-            | Message::Rlerror { tag, .. }
-            | Message::Tflush { tag, .. }
-            | Message::Rflush { tag, .. }
-            | Message::Twalk { tag, .. }
-            | Message::Rwalk { tag, .. }
-            | Message::Topen { tag, .. }
-            | Message::Ropen { tag, .. }
-            | Message::Tcreate { tag, .. }
-            | Message::Rcreate { tag, .. }
-            | Message::Tread { tag, .. }
-            | Message::Rread { tag, .. }
-            | Message::Twrite { tag, .. }
-            | Message::Rwrite { tag, .. }
-            | Message::Tclunk { tag, .. }
-            | Message::Rclunk { tag, .. }
-            | Message::Tremove { tag, .. }
-            | Message::Rremove { tag, .. }
-            | Message::Tstat { tag, .. }
-            | Message::Rstat { tag, .. }
-            | Message::Twstat { tag, .. }
-            | Message::Rwstat { tag, .. }
-            | Message::Topenfd { tag, .. }
-            | Message::Ropenfd { tag, .. }
-            // Added 9P2000.L specific message types
-            | Message::Tlopen { tag, .. }
-            | Message::Rlopen { tag, .. }
-            | Message::Tlcreate { tag, .. }
-            | Message::Rlcreate { tag, .. }
-            | Message::Tsymlink { tag, .. }
-            | Message::Rsymlink { tag, .. }
-            | Message::Tmknod { tag, .. }
-            | Message::Rmknod { tag, .. }
-            | Message::Trename { tag, .. }
-            | Message::Rrename { tag, .. }
-            | Message::Treadlink { tag, .. }
-            | Message::Rreadlink { tag, .. }
-            | Message::Tgetattr { tag, .. }
-            | Message::Rgetattr { tag, .. }
-            | Message::Tsetattr { tag, .. }
-            | Message::Rsetattr { tag, .. }
-            | Message::Txattrwalk { tag, .. }
-            | Message::Rxattrwalk { tag, .. }
-            | Message::Txattrcreate { tag, .. }
-            | Message::Rxattrcreate { tag, .. }
-            | Message::Treaddir { tag, .. }
-            | Message::Rreaddir { tag, .. }
-            | Message::Tfsync { tag, .. }
-            | Message::Rfsync { tag, .. }
-            | Message::Tlock { tag, .. }
-            | Message::Rlock { tag, .. }
-            | Message::Tgetlock { tag, .. }
-            | Message::Rgetlock { tag, .. }
-            | Message::Tlink { tag, .. }
-            | Message::Rlink { tag, .. }
-            | Message::Tmkdir { tag, .. }
-            | Message::Rmkdir { tag, .. }
-            | Message::Trenameat { tag, .. }
-            | Message::Rrenameat { tag, .. }
-            | Message::Tunlinkat { tag, .. }
-            | Message::Runlinkat { tag, .. }
-            | Message::Tstatfs { tag, .. }
-            | Message::Rstatfs { tag, .. } => *tag,
+            Message::Tlink(m) => m.tag,
+            Message::Rlink(m) => m.tag,
+            Message::Tstatfs(m) => m.tag,
+            Message::Rstatfs(m) => m.tag,
+            Message::Tversion(m) => m.tag,
+            Message::Rversion(m) => m.tag,
+            Message::Tauth(m) => m.tag,
+            Message::Rauth(m) => m.tag,
+            Message::Tattach(m) => m.tag,
+            Message::Rattach(m) => m.tag,
+            Message::Tflush(m) => m.tag,
+            Message::Rflush(m) => m.tag,
+            Message::Twalk(m) => m.tag,
+            Message::Rwalk(m) => m.tag,
+            Message::Tlopen(m) => m.tag,
+            Message::Rlopen(m) => m.tag,
+            Message::Tlcreate(m) => m.tag,
+            Message::Rlcreate(m) => m.tag,
+            Message::Tread(m) => m.tag,
+            Message::Rread(m) => m.tag,
+            Message::Treadlink(m) => m.tag,
+            Message::Rreadlink(m) => m.tag,
+            Message::Twrite(m) => m.tag,
+            Message::Rwrite(m) => m.tag,
+            Message::Tclunk(m) => m.tag,
+            Message::Rclunk(m) => m.tag,
+            Message::Tremove(m) => m.tag,
+            Message::Rremove(m) => m.tag,
+            Message::Tstat(m) => m.tag,
+            Message::Rstat(m) => m.tag,
+            Message::Twstat(m) => m.tag,
+            Message::Rwstat(m) => m.tag,
+
+            // Linux-specific 9P2000.L extensions
+            Message::Tgetattr(m) => m.tag,
+            Message::Rgetattr(m) => m.tag,
+            Message::Tsetattr(m) => m.tag,
+            Message::Rsetattr(m) => m.tag,
+            Message::Txattrwalk(m) => m.tag,
+            Message::Rxattrwalk(m) => m.tag,
+            Message::Txattrcreate(m) => m.tag,
+            Message::Rxattrcreate(m) => m.tag,
+            Message::Treaddir(m) => m.tag,
+            Message::Rreaddir(m) => m.tag,
+            Message::Tfsync(m) => m.tag,
+            Message::Rfsync(m) => m.tag,
+            Message::Tlock(m) => m.tag,
+            Message::Rlock(m) => m.tag,
+            Message::Tgetlock(m) => m.tag,
+            Message::Rgetlock(m) => m.tag,
+            Message::Tmkdir(m) => m.tag,
+            Message::Rmkdir(m) => m.tag,
+            Message::Trename(m) => m.tag,
+            Message::Rrename(m) => m.tag,
+            Message::Trenameat(m) => m.tag,
+            Message::Rrenameat(m) => m.tag,
+            Message::Tunlinkat(m) => m.tag,
+            Message::Runlinkat(m) => m.tag,
+            Message::Tsymlink(m) => m.tag,
+            Message::Rsymlink(m) => m.tag,
+            Message::Tmknod(m) => m.tag,
+            Message::Rmknod(m) => m.tag,
+
+            // Error response
+            Message::Rlerror(m) => m.tag,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tversion {
+    pub tag: u16,
+    pub msize: u32,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rversion {
+    pub tag: u16,
+    pub msize: u32,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tauth {
+    pub tag: u16,
+    pub afid: u32,
+    pub uname: String,
+    pub aname: String,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rauth {
+    pub tag: u16,
+    pub aqid: Qid,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tattach {
+    pub tag: u16,
+    pub fid: u32,
+    pub afid: u32,
+    pub uname: String,
+    pub aname: String,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rattach {
+    pub tag: u16,
+    pub qid: Qid,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tflush {
+    pub tag: u16,
+    pub oldtag: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rflush {
+    pub tag: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Twalk {
+    pub tag: u16,
+    pub fid: u32,
+    pub newfid: u32,
+    pub wnames: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rwalk {
+    pub tag: u16,
+    pub wqids: Vec<Qid>,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tlopen {
+    pub tag: u16,
+    pub fid: u32,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rlopen {
+    pub tag: u16,
+    pub qid: Qid,
+    pub iounit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tlcreate {
+    pub tag: u16,
+    pub fid: u32,
+    pub name: String,
+    pub flags: u32,
+    pub mode: u32,
+    pub gid: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rlcreate {
+    pub tag: u16,
+    pub qid: Qid,
+    pub iounit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tread {
+    pub tag: u16,
+    pub fid: u32,
+    pub offset: u64,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rread {
+    pub tag: u16,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Twrite {
+    pub tag: u16,
+    pub fid: u32,
+    pub offset: u64,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rwrite {
+    pub tag: u16,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tclunk {
+    pub tag: u16,
+    pub fid: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rclunk {
+    pub tag: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tremove {
+    pub tag: u16,
+    pub fid: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rremove {
+    pub tag: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tstat {
+    pub tag: u16,
+    pub fid: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rstat {
+    pub tag: u16,
+    pub stat: Stat,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Twstat {
+    pub tag: u16,
+    pub fid: u32,
+    pub stat: Stat,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rwstat {
+    pub tag: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Treadlink {
+    pub tag: u16,
+    pub fid: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rreadlink {
+    pub tag: u16,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tlink {
+    pub tag: u16,
+    pub dfid: u32,
+    pub fid: u32,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rlink {
+    pub tag: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tgetattr {
+    pub tag: u16,
+    pub fid: u32,
+    pub request_mask: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rgetattr {
+    pub tag: u16,
+    pub valid: u64,
+    pub qid: Qid,
+    pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
+    pub nlink: u64,
+    pub rdev: u64,
+    pub size: u64,
+    pub blksize: u64,
+    pub blocks: u64,
+    pub atime_sec: u64,
+    pub atime_nsec: u64,
+    pub mtime_sec: u64,
+    pub mtime_nsec: u64,
+    pub ctime_sec: u64,
+    pub ctime_nsec: u64,
+    pub btime_sec: u64,
+    pub btime_nsec: u64,
+    pub gen: u64,
+    pub data_version: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tsetattr {
+    pub tag: u16,
+    pub fid: u32,
+    pub valid: u32,
+    pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
+    pub size: u64,
+    pub atime_sec: u64,
+    pub atime_nsec: u64,
+    pub mtime_sec: u64,
+    pub mtime_nsec: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rsetattr {
+    pub tag: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Txattrwalk {
+    pub tag: u16,
+    pub fid: u32,
+    pub newfid: u32,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rxattrwalk {
+    pub tag: u16,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Txattrcreate {
+    pub tag: u16,
+    pub fid: u32,
+    pub name: String,
+    pub attr_size: u64,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rxattrcreate {
+    pub tag: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Treaddir {
+    pub tag: u16,
+    pub fid: u32,
+    pub offset: u64,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rreaddir {
+    pub tag: u16,
+    pub data: Vec<Dirent>, // Contains packed Dirent structures
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tfsync {
+    pub tag: u16,
+    pub fid: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rfsync {
+    pub tag: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tlock {
+    pub tag: u16,
+    pub fid: u32,
+    pub type_: u8,
+    pub flags: u32,
+    pub start: u64,
+    pub length: u64,
+    pub proc_id: u32,
+    pub client_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rlock {
+    pub tag: u16,
+    pub status: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tgetlock {
+    pub tag: u16,
+    pub fid: u32,
+    pub type_: u8,
+    pub start: u64,
+    pub length: u64,
+    pub proc_id: u32,
+    pub client_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rgetlock {
+    pub tag: u16,
+    pub type_: u8,
+    pub start: u64,
+    pub length: u64,
+    pub proc_id: u32,
+    pub client_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tmkdir {
+    pub tag: u16,
+    pub dfid: u32,
+    pub name: String,
+    pub mode: u32,
+    pub gid: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rmkdir {
+    pub tag: u16,
+    pub qid: Qid,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Trename {
+    pub tag: u16,
+    pub fid: u32,
+    pub dfid: u32,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rrename {
+    pub tag: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Trenameat {
+    pub tag: u16,
+    pub olddirfid: u32,
+    pub oldname: String,
+    pub newdirfid: u32,
+    pub newname: String,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rrenameat {
+    pub tag: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tunlinkat {
+    pub tag: u16,
+    pub dirfid: u32,
+    pub name: String,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Runlinkat {
+    pub tag: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tsymlink {
+    pub tag: u16,
+    pub fid: u32,
+    pub name: String,
+    pub symtgt: String,
+    pub gid: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rsymlink {
+    pub tag: u16,
+    pub qid: Qid,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tmknod {
+    pub tag: u16,
+    pub dirfid: u32,
+    pub name: String,
+    pub mode: u32,
+    pub major: u32,
+    pub minor: u32,
+    pub gid: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Tstatfs {
+    pub tag: u16,
+    pub fid: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rstatfs {
+    pub tag: u16,
+    pub r#type: u32,
+    pub bsize: u32,
+    pub blocks: u64,
+    pub bfree: u64,
+    pub bavail: u64,
+    pub files: u64,
+    pub ffree: u64,
+    pub fsid: u64,
+    pub namelen: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rmknod {
+    pub tag: u16,
+    pub qid: Qid,
+}
+
+#[derive(Debug, Clone, PartialEq, DecodeBytes, EncodeBytes)]
+pub struct Rlerror {
+    pub tag: u16,
+    pub ecode: u32,
+}
+
+pub trait DecodeBytes: Sized {
+    fn decode_bytes(buf: &mut BytesMut) -> Result<Self>;
+}
+
+pub trait EncodeBytes {
+    fn encode_bytes(&self, buf: &mut BytesMut);
+}
+
+impl DecodeBytes for u8 {
+    fn decode_bytes(buf: &mut BytesMut) -> Result<Self> {
+        if buf.is_empty() {
+            println!("u8: too small");
+            return Err(Error::BufferTooSmall);
+        }
+        Ok(buf.get_u8())
+    }
+}
+
+impl EncodeBytes for u8 {
+    fn encode_bytes(&self, buf: &mut BytesMut) {
+        buf.put_u8(*self);
+    }
+}
+
+impl DecodeBytes for u16 {
+    fn decode_bytes(buf: &mut BytesMut) -> Result<Self> {
+        if buf.len() < 2 {
+            println!("u16: too small");
+            return Err(Error::BufferTooSmall);
+        }
+        Ok(buf.get_u16_le())
+    }
+}
+
+impl EncodeBytes for u16 {
+    fn encode_bytes(&self, buf: &mut BytesMut) {
+        buf.put_u16_le(*self);
+    }
+}
+
+impl DecodeBytes for u32 {
+    fn decode_bytes(buf: &mut BytesMut) -> Result<Self> {
+        if buf.len() < 4 {
+            println!("u32: too small");
+            return Err(Error::BufferTooSmall);
+        }
+        Ok(buf.get_u32_le())
+    }
+}
+
+impl EncodeBytes for u32 {
+    fn encode_bytes(&self, buf: &mut BytesMut) {
+        buf.put_u32_le(*self);
+    }
+}
+
+impl DecodeBytes for u64 {
+    fn decode_bytes(buf: &mut BytesMut) -> Result<Self> {
+        if buf.len() < 8 {
+            println!("u64: too small");
+            return Err(Error::BufferTooSmall);
+        }
+        Ok(buf.get_u64_le())
+    }
+}
+
+impl EncodeBytes for u64 {
+    fn encode_bytes(&self, buf: &mut BytesMut) {
+        buf.put_u64_le(*self);
+    }
+}
+
+impl DecodeBytes for String {
+    fn decode_bytes(buf: &mut BytesMut) -> Result<Self> {
+        // First decode the string length as u32
+        let length = u16::decode_bytes(buf)? as usize;
+
+        // Check if we have enough bytes for the string
+        if buf.len() < length {
+            println!("string: too small");
+            return Err(Error::BufferTooSmall);
+        }
+
+        // Extract the string bytes
+        let bytes = buf.split_to(length);
+
+        // Convert to UTF-8 string
+        String::from_utf8(bytes.to_vec()).map_err(|_| Error::InvalidUtf8)
+    }
+}
+
+impl EncodeBytes for String {
+    fn encode_bytes(&self, buf: &mut BytesMut) {
+        // First encode the length as u32
+        (self.len() as u16).encode_bytes(buf);
+
+        // Then encode the string bytes
+        buf.put_slice(self.as_bytes());
+    }
+}
+
+impl DecodeBytes for Vec<u8> {
+    fn decode_bytes(buf: &mut BytesMut) -> Result<Self> {
+        if buf.len() < 4 {
+            println!("Vec<u8>: too small");
+            return Err(Error::BufferTooSmall);
+        }
+
+        // Read 4-byte length prefix (data blocks use 4 bytes for length)
+        let len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+        buf.advance(4);
+
+        if buf.len() < len {
+            println!("Vec<u8>: too small");
+            return Err(Error::BufferTooSmall);
+        }
+
+        // Extract the data bytes
+        let data = buf.split_to(len).to_vec();
+        Ok(data)
+    }
+}
+
+impl EncodeBytes for Vec<u8> {
+    fn encode_bytes(&self, buf: &mut BytesMut) {
+        // Ensure buffer capacity
+        buf.reserve(4 + self.len());
+
+        // Write 4-byte length
+        buf.extend_from_slice(&(self.len() as u32).to_le_bytes());
+
+        // Write data bytes
+        buf.extend_from_slice(self);
+    }
+}
+
+// Implementation for Vec<String> (e.g., wnames in Twalk)
+impl DecodeBytes for Vec<String> {
+    fn decode_bytes(buf: &mut BytesMut) -> Result<Self> {
+        if buf.len() < 2 {
+            println!("Vec<String> too small");
+            return Err(Error::BufferTooSmall);
+        }
+
+        // Read 2-byte count prefix
+        let count = u16::from_le_bytes([buf[0], buf[1]]) as usize;
+        buf.advance(2);
+
+        let mut strings = Vec::with_capacity(count);
+        for _ in 0..count {
+            strings.push(String::decode_bytes(buf)?);
+        }
+
+        Ok(strings)
+    }
+}
+
+impl EncodeBytes for Vec<String> {
+    fn encode_bytes(&self, buf: &mut BytesMut) {
+        // Write 2-byte count
+        buf.extend_from_slice(&(self.len() as u16).to_le_bytes());
+
+        // Write each string
+        for s in self {
+            s.encode_bytes(buf);
+        }
+    }
+}
+
+// Implementation for Vec<Qid> (e.g., wqids in Rwalk)
+impl DecodeBytes for Vec<Qid> {
+    fn decode_bytes(buf: &mut BytesMut) -> Result<Self> {
+        if buf.len() < 2 {
+            println!("Vec<Qid> too small");
+            return Err(Error::BufferTooSmall);
+        }
+
+        // Read 2-byte count prefix
+        let count = u16::from_le_bytes([buf[0], buf[1]]) as usize;
+        buf.advance(2);
+
+        let mut qids = Vec::with_capacity(count);
+        for _ in 0..count {
+            qids.push(Qid::decode_bytes(buf)?);
+        }
+
+        Ok(qids)
+    }
+}
+
+impl EncodeBytes for Vec<Qid> {
+    fn encode_bytes(&self, buf: &mut BytesMut) {
+        // Write 2-byte count
+        buf.extend_from_slice(&(self.len() as u16).to_le_bytes());
+
+        // Write each Qid
+        for qid in self {
+            qid.encode_bytes(buf);
+        }
+    }
+}
+
+// Implementation for Vec<Dirent> (used in Rreaddir)
+impl DecodeBytes for Vec<Dirent> {
+    fn decode_bytes(buf: &mut BytesMut) -> Result<Self> {
+        // For Rreaddir, the data section contains consecutive Dirent entries
+        // until the buffer is exhausted
+        let mut dirents = Vec::new();
+
+        // Keep decoding until buffer is empty
+        while !buf.is_empty() {
+            // Dirent has specific format according to 9P2000.L
+            // Each entry should be decodable as a Dirent
+            dirents.push(Dirent::decode_bytes(buf)?);
+        }
+
+        Ok(dirents)
+    }
+}
+
+impl EncodeBytes for Vec<Dirent> {
+    fn encode_bytes(&self, buf: &mut BytesMut) {
+        // For Rreaddir, we just concatenate the entries
+        for dirent in self {
+            dirent.encode_bytes(buf);
         }
     }
 }
