@@ -19,20 +19,30 @@ pub(crate) enum Commands {
 pub(crate) struct MountCommand {
     /// plan9 dial string
     pub dial: String,
-    /// the directory to mount the filesystem at. must be writable by the mounter.
+    /// the directory to mount the filesystem at. must be writable by the mounter
     ///
-    /// EXAMPLE:
+    /// EXAMPLES:
+    ///
     /// - `tcp!host!port`
+    ///
     /// - `unix!socket`
-    pub mount_point: String,
+    pub mount_point: PathBuf,
 
     #[arg(long, short)]
     /// tree to mount when attaching to a server that exports multiple trees
     pub aname: Option<String>,
 
     #[arg(long, short)]
-    /// do not perform any points and only print the underlying mount command
+    /// support device mapping
+    pub device_mapping: bool,
+
+    #[arg(long, short)]
+    /// do not perform any mount and only print the mount plan
     pub dry_run: bool,
+
+    #[arg(long, short)]
+    /// support 9p extensions (9p2000.u and 9p2000.L)
+    pub extensions: bool,
 
     #[arg(long, short = 'x')]
     /// mount exclusively so that other users cannot access the mount

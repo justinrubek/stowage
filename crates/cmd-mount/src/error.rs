@@ -10,8 +10,6 @@ pub enum Error {
     NotWritable(PathBuf),
     #[error("{0}: refusing to bind over sticky directory")]
     StickyDirectory(PathBuf),
-    #[error("Mount failed with code: {0}")]
-    Mount(nix::errno::Errno),
     #[error("Could not look up current user")]
     UserLookup,
     #[error("{0}: Invalid path")]
@@ -28,6 +26,28 @@ pub enum Error {
     Unmount(PathBuf, String),
     #[error(transparent)]
     Nix(#[from] nix::Error),
+    #[error("Empty dial string")]
+    EmptyDialString,
+    #[error("{0}: unknown network (expecting unix, tcp, or virtio)")]
+    UnknownNetwork(String),
+    #[error("Missing dial address")]
+    MissingDialAddress,
+    #[error("{0}: cannot access socket")]
+    SocketAccess(String),
+    #[error("{0}: invalid port")]
+    InvalidPort(String),
+    #[error("{0}: could not resolve hostname")]
+    HostResolution(String),
+    #[error("{0}: username contains commas")]
+    InvalidUsername(String),
+    #[error("{0}: spec contains commas")]
+    InvalidAname(String),
+    #[error("{0}: msize must be a positive integer")]
+    InvalidMsize(u32),
+    #[error("Mount error: {0}")]
+    Mount(String),
+    #[error(transparent)]
+    NulError(#[from] std::ffi::NulError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
