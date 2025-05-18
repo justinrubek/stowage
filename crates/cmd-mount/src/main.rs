@@ -50,7 +50,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Commands::Mount(mount) => do_mount(&mount),
-        Commands::Unmount(unmount) => {
+        Commands::Umount(unmount) => {
             let Some(user) = User::from_uid(getuid())? else {
                 return Err(Error::UserLookup);
             };

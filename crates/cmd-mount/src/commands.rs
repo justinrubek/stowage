@@ -11,7 +11,7 @@ pub(crate) struct Args {
 pub(crate) enum Commands {
     Bind(BindCommand),
     Mount(MountCommand),
-    Unmount(UnmountCommand),
+    Umount(UmountCommand),
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -72,6 +72,6 @@ pub(crate) struct BindCommand {
 }
 
 #[derive(clap::Args, Debug)]
-pub(crate) struct UnmountCommand {
+pub(crate) struct UmountCommand {
     pub target: String,
 }
