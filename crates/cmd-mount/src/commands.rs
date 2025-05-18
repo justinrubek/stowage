@@ -32,7 +32,7 @@ pub(crate) struct MountCommand {
     /// tree to mount when attaching to a server that exports multiple trees
     pub aname: Option<String>,
 
-    #[arg(long, short)]
+    #[arg(long, short = 'v')]
     /// support device mapping
     pub device_mapping: bool,
 

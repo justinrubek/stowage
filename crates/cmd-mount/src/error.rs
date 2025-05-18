@@ -47,7 +47,7 @@ pub enum Error {
     #[error("Mount error: {0}")]
     Mount(String),
     #[error(transparent)]
-    NulError(#[from] std::ffi::NulError),
+    Nul(#[from] std::ffi::NulError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

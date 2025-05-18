@@ -27,9 +27,8 @@ fn main() -> Result<()> {
     let args = commands::Args::parse();
     match args.command {
         Commands::Bind(bind) => {
-            let stat_result = match stat(&bind.target) {
-                Ok(result) => result,
-                Err(_) => return Err(Error::Path(bind.target.clone())),
+            let Ok(stat_result) = stat(&bind.target) else {
+                return Err(Error::Path(bind.target.clone()));
             };
 
             if access(&bind.target, AccessFlags::W_OK).is_err() {
@@ -50,208 +49,21 @@ fn main() -> Result<()> {
 
             Ok(())
         }
-        Commands::Mount(mount) => {
-            // validate mount point
-            let stat_result = match stat(&mount.mount_point) {
-                Ok(result) => result,
-                Err(_) => return Err(Error::Path(mount.mount_point.clone())),
-            };
-
-            // check write permission
-            if access(&mount.mount_point, AccessFlags::W_OK).is_err() {
-                return Err(Error::NotWritable(mount.mount_point.clone().into()));
-            }
-
-            // check sticky bit
-            if stat_result.st_mode & Mode::S_ISVTX.bits() != 0 {
-                return Err(Error::StickyDirectory(mount.mount_point.clone().into()));
-            }
-
-            let parts: Vec<&str> = mount.dial.split('!').collect();
-            if parts.is_empty() {
-                return Err(Error::EmptyDialString);
-            }
-
-            let proto = parts[0];
-            if proto != "unix" && proto != "tcp" && proto != "virtio" && proto != "-" {
-                return Err(Error::UnknownNetwork(proto.to_string()));
-            }
-
-            let (trans, addr) = match proto {
-                "-" => ("fd".to_string(), "nodev".to_string()),
-                _ => {
-                    if parts.len() < 2 {
-                        return Err(Error::MissingDialAddress);
-                    }
-
-                    let addr = parts[1];
-
-                    // for unix sockets, check accessibility
-                    if proto == "unix" {
-                        if access(Path::new(addr), AccessFlags::R_OK | AccessFlags::W_OK).is_err() {
-                            return Err(Error::SocketAccess(addr.to_string()));
-                        }
-                    }
-
-                    // for tcp, resolve hostname and port
-                    let mut address = addr.to_string();
-                    if proto == "tcp" {
-                        let port = if parts.len() > 2 {
-                            match parts[2].parse::<u16>() {
-                                Ok(p) => p,
-                                Err(_) => return Err(Error::InvalidPort(parts[2].to_string())),
-                            }
-                        } else {
-                            564 // default 9p port
-                        };
-
-                        // resolve hostname to IP
-                        match (addr, port).to_socket_addrs() {
-                            Ok(mut addrs) => {
-                                if let Some(socket_addr) = addrs.next() {
-                                    address = socket_addr.ip().to_string();
-                                } else {
-                                    return Err(Error::HostResolution(addr.to_string()));
-                                }
-                            }
-                            Err(_) => return Err(Error::HostResolution(addr.to_string())),
-                        }
-                    }
-
-                    (proto.to_string(), address)
-                }
-            };
-
-            // build mount options
-            let mut options = vec![];
-
-            // base options
-            options.push(format!("trans={}", trans));
-
-            // user identification
-            let user = match User::from_uid(getuid())? {
-                Some(user) => user,
-                None => return Err(Error::UserLookup),
-            };
-
-            options.push(format!("name={}", user.name));
-
-            // add uname
-            let uname = match &mount.uname {
-                Some(name) => name.clone(),
-                None => user.name,
-            };
-
-            if uname.contains(',') {
-                return Err(Error::InvalidUsername(uname));
-            }
-            options.push(format!("uname={}", uname));
-
-            // add other options based on command flags
-            if mount.single_attach {
-                options.push("access=any".to_string());
-            }
-
-            if mount.exclusive {
-                options.push(format!("access={}", getuid()));
-            }
-
-            if let Some(aname) = &mount.aname {
-                if aname.contains(',') {
-                    return Err(Error::InvalidAname(aname.clone()));
-                }
-                options.push(format!("aname={}", aname));
-            }
-
-            if let Some(msize) = mount.msize {
-                if msize > 0 {
-                    options.push(format!("msize={}", msize));
-                } else {
-                    return Err(Error::InvalidMsize(msize));
-                }
-            }
-
-            if mount.inherit_user {
-                options.push(format!("uid={},gid={}", getuid(), getgid()));
-                options.push(format!("dfltuid={},dfltgid={}", getuid(), getgid()));
-            }
-
-            // add standard security options
-            if user.uid != 0.into() {
-                options.push("nosuid".to_string());
-            }
-
-            if !mount.device_mapping {
-                options.push("nodev".to_string());
-            }
-
-            if !mount.extensions {
-                options.push("noextend".to_string());
-            }
-
-            // special case for fd transport
-            if trans == "fd" {
-                options.push("rfdno=0,wfdno=1".to_string());
-            }
-
-            // assemble final options string
-            let options_str = options.join(",");
-
-            // handle dry run
-            if mount.dry_run {
-                info!(
-                    "would execute: mount -t 9p -o {} {} {}",
-                    options_str,
-                    addr,
-                    mount.mount_point.display()
-                );
-                return Ok(());
-            }
-
-            // Perform mount operation
-            let c_addr = CString::new(addr)?;
-            let mount_path_str = mount.mount_point.to_string_lossy();
-            let c_mountpoint = CString::new(mount_path_str.as_bytes())?;
-            let c_options = CString::new(options_str)?;
-
-            match unsafe {
-                // Using libc::mount directly as nix doesn't fully support all options we need
-                libc::mount(
-                    c_addr.as_ptr(),
-                    c_mountpoint.as_ptr(),
-                    CString::new("9p").unwrap().as_ptr(),
-                    0,
-                    c_options.as_ptr() as *const libc::c_void,
-                )
-            } {
-                0 => {
-                    info!(
-                        "Successfully mounted {} at {}",
-                        mount.dial,
-                        mount.mount_point.display()
-                    );
-                    Ok(())
-                }
-                _ => Err(Error::Mount(std::io::Error::last_os_error().to_string())),
-            }
-        }
+        Commands::Mount(mount) => do_mount(&mount),
         Commands::Unmount(unmount) => {
-            let user = match User::from_uid(getuid())? {
-                Some(user) => user,
-                None => return Err(Error::UserLookup),
+            let Some(user) = User::from_uid(getuid())? else {
+                return Err(Error::UserLookup);
             };
 
             let home_dir = user.dir;
             let username = user.name;
 
-            let canonical_path = match std::fs::canonicalize(&unmount.target) {
-                Ok(path) => path,
-                Err(_) => return Err(Error::InvalidPath(unmount.target)),
+            let Ok(canonical_path) = std::fs::canonicalize(&unmount.target) else {
+                return Err(Error::InvalidPath(unmount.target));
             };
 
-            let file = match File::open("/proc/mounts") {
-                Ok(file) => file,
-                Err(_) => return Err(Error::MountsAccess),
+            let Ok(file) = File::open("/proc/mounts") else {
+                return Err(Error::MountsAccess);
             };
 
             let reader = BufReader::new(file);
@@ -281,13 +93,13 @@ fn main() -> Result<()> {
                         return Err(Error::NonNinePFilesystem(canonical_path));
                     }
 
-                    if !in_home_dir && !is_mounted_by_user(&mount_options, &username) {
+                    if !in_home_dir && !is_mounted_by_user(mount_options, &username) {
                         return Err(Error::NotMountedByUser(canonical_path));
                     }
 
                     // perform unmount
                     match umount(&canonical_path) {
-                        Ok(_) => {
+                        Ok(()) => {
                             info!("Successfully unmounted {}", canonical_path.display());
                             return Ok(());
                         }
@@ -309,4 +121,202 @@ fn is_mounted_by_user(options: &str, username: &str) -> bool {
         }
     }
     false
+}
+
+fn do_mount(mount: &commands::MountCommand) -> Result<()> {
+    // validate mount point
+    let Ok(stat_result) = stat(&mount.mount_point) else {
+        return Err(Error::Path(mount.mount_point.clone()));
+    };
+
+    // check write permission
+    if access(&mount.mount_point, AccessFlags::W_OK).is_err() {
+        return Err(Error::NotWritable(mount.mount_point.clone()));
+    }
+
+    // check sticky bit
+    if stat_result.st_mode & Mode::S_ISVTX.bits() != 0 {
+        return Err(Error::StickyDirectory(mount.mount_point.clone()));
+    }
+
+    let parts: Vec<&str> = mount.dial.split('!').collect();
+    if parts.is_empty() {
+        return Err(Error::EmptyDialString);
+    }
+
+    let proto = parts[0];
+    if proto != "unix" && proto != "tcp" && proto != "virtio" && proto != "-" {
+        return Err(Error::UnknownNetwork(proto.to_string()));
+    }
+
+    let (trans, addr) = parse_dial_string(&mount.dial)?;
+
+    // build mount options
+    let mut options = vec![];
+
+    // base options
+    options.push(format!("trans={trans}"));
+
+    let Some(user) = User::from_uid(getuid())? else {
+        return Err(Error::UserLookup);
+    };
+
+    options.push(format!("name={}", user.name));
+
+    // add uname
+    let uname = match &mount.uname {
+        Some(name) => name.clone(),
+        None => user.name,
+    };
+
+    if uname.contains(',') {
+        return Err(Error::InvalidUsername(uname));
+    }
+    options.push(format!("uname={uname}"));
+
+    // add other options based on command flags
+    if mount.single_attach {
+        options.push("access=any".to_string());
+    }
+
+    if mount.exclusive {
+        options.push(format!("access={}", getuid()));
+    }
+
+    if let Some(aname) = &mount.aname {
+        if aname.contains(',') {
+            return Err(Error::InvalidAname(aname.clone()));
+        }
+        options.push(format!("aname={aname}"));
+    }
+
+    if let Some(msize) = mount.msize {
+        if msize > 0 {
+            options.push(format!("msize={msize}"));
+        } else {
+            return Err(Error::InvalidMsize(msize));
+        }
+    }
+
+    if mount.inherit_user {
+        options.push(format!("uid={},gid={}", getuid(), getgid()));
+        options.push(format!("dfltuid={},dfltgid={}", getuid(), getgid()));
+    }
+
+    // add standard security options
+    if user.uid != 0.into() {
+        options.push("nosuid".to_string());
+    }
+
+    if !mount.device_mapping {
+        options.push("nodev".to_string());
+    }
+
+    if !mount.extensions {
+        options.push("noextend".to_string());
+    }
+
+    // special case for fd transport
+    if trans == "fd" {
+        options.push("rfdno=0,wfdno=1".to_string());
+    }
+
+    // assemble final options string
+    let options_str = options.join(",");
+
+    // handle dry run
+    if mount.dry_run {
+        info!(
+            "would execute: mount -t 9p -o {} {} {}",
+            options_str,
+            addr,
+            mount.mount_point.display()
+        );
+        return Ok(());
+    }
+
+    // Perform mount operation
+    let c_addr = CString::new(addr)?;
+    let mount_path_str = mount.mount_point.to_string_lossy();
+    let c_mountpoint = CString::new(mount_path_str.as_bytes())?;
+    let c_options = CString::new(options_str)?;
+
+    match unsafe {
+        // Using libc::mount directly as nix doesn't fully support all options we need
+        libc::mount(
+            c_addr.as_ptr(),
+            c_mountpoint.as_ptr(),
+            CString::new("9p").unwrap().as_ptr(),
+            0,
+            c_options.as_ptr().cast::<libc::c_void>(),
+        )
+    } {
+        0 => {
+            info!(
+                "Successfully mounted {} at {}",
+                mount.dial,
+                mount.mount_point.display()
+            );
+            Ok(())
+        }
+        _ => Err(Error::Mount(std::io::Error::last_os_error().to_string())),
+    }
+}
+
+/// Parse a 9P dial string and return (transport, address)
+fn parse_dial_string(dial: &str) -> Result<(String, String)> {
+    let parts: Vec<&str> = dial.split('!').collect();
+    if parts.is_empty() {
+        return Err(Error::EmptyDialString);
+    }
+
+    let proto = parts[0];
+    if proto != "unix" && proto != "tcp" && proto != "virtio" && proto != "-" {
+        return Err(Error::UnknownNetwork(proto.to_string()));
+    }
+
+    if proto == "-" {
+        return Ok(("fd".to_string(), "nodev".to_string()));
+    }
+
+    // need address part for all other protocols
+    if parts.len() < 2 {
+        return Err(Error::MissingDialAddress);
+    }
+
+    let addr = parts[1];
+
+    // for unix sockets, check accessibility
+    if proto == "unix" && access(Path::new(addr), AccessFlags::R_OK | AccessFlags::W_OK).is_err() {
+        return Err(Error::SocketAccess(addr.to_string()));
+    }
+
+    // for TCP, resolve hostname and port
+    let address = if proto == "tcp" {
+        let port = if parts.len() > 2 {
+            match parts[2].parse::<u16>() {
+                Ok(p) => p,
+                Err(_) => return Err(Error::InvalidPort(parts[2].to_string())),
+            }
+        } else {
+            564 // default 9P port
+        };
+
+        // resolve hostname to IP
+        match (addr, port).to_socket_addrs() {
+            Ok(mut addrs) => {
+                if let Some(socket_addr) = addrs.next() {
+                    socket_addr.ip().to_string()
+                } else {
+                    return Err(Error::HostResolution(addr.to_string()));
+                }
+            }
+            Err(_) => return Err(Error::HostResolution(addr.to_string())),
+        }
+    } else {
+        // for unix and virtio, use address as is
+        addr.to_string()
+    };
+
+    Ok((proto.to_string(), address))
 }
