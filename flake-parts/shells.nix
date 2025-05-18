@@ -24,6 +24,7 @@
 
         LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath packages;
         RUST_SRC_PATH = "${self'.packages.rust-toolchain}/lib/rustlib/src/rust/src";
+        LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
         shellHook = config.pre-commit.installationScript;
       };

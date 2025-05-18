@@ -14,6 +14,7 @@ pub(crate) enum Commands {
     Unmount(UnmountCommand),
 }
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(clap::Args, Debug)]
 pub(crate) struct MountCommand {
     /// plan9 dial string
@@ -56,8 +57,8 @@ pub(crate) struct MountCommand {
 
 #[derive(clap::Args, Debug)]
 pub(crate) struct BindCommand {
-    pub source: String,
-    pub destination: String,
+    pub source: PathBuf,
+    pub target: PathBuf,
 }
 
 #[derive(clap::Args, Debug)]
