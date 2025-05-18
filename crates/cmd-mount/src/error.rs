@@ -44,6 +44,10 @@ pub enum Error {
     InvalidAname(String),
     #[error("{0}: msize must be a positive integer")]
     InvalidMsize(u32),
+    #[error("{0}: IPv6 address not supported for 9p mounts")]
+    IPv6NotSupported(String),
+    #[error("{0}: No IPv4 address found for hostname")]
+    NoIPv4Address(String),
     #[error("Mount error: {0}")]
     Mount(String),
     #[error(transparent)]

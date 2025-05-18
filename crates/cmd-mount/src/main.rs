@@ -149,13 +149,8 @@ fn do_mount(mount: &commands::MountCommand) -> Result<()> {
         return Err(Error::UnknownNetwork(proto.to_string()));
     }
 
-    let (trans, addr) = parse_dial_string(&mount.dial)?;
-
-    // build mount options
-    let mut options = vec![];
-
-    // base options
-    options.push(format!("trans={trans}"));
+    let transport = parse_dial_string(&mount.dial)?;
+    let mut options = transport.options;
 
     let Some(user) = User::from_uid(getuid())? else {
         return Err(Error::UserLookup);
@@ -216,11 +211,6 @@ fn do_mount(mount: &commands::MountCommand) -> Result<()> {
         options.push("noextend".to_string());
     }
 
-    // special case for fd transport
-    if trans == "fd" {
-        options.push("rfdno=0,wfdno=1".to_string());
-    }
-
     // assemble final options string
     let options_str = options.join(",");
 
@@ -229,14 +219,14 @@ fn do_mount(mount: &commands::MountCommand) -> Result<()> {
         info!(
             "would execute: mount -t 9p -o {} {} {}",
             options_str,
-            addr,
+            transport.addr,
             mount.mount_point.display()
         );
         return Ok(());
     }
 
     // Perform mount operation
-    let c_addr = CString::new(addr)?;
+    let c_addr = CString::new(transport.addr)?;
     let mount_path_str = mount.mount_point.to_string_lossy();
     let c_mountpoint = CString::new(mount_path_str.as_bytes())?;
     let c_options = CString::new(options_str)?;
@@ -264,7 +254,7 @@ fn do_mount(mount: &commands::MountCommand) -> Result<()> {
 }
 
 /// Parse a 9P dial string and return (transport, address)
-fn parse_dial_string(dial: &str) -> Result<(String, String)> {
+fn parse_dial_string(dial: &str) -> Result<TransportContext> {
     let parts: Vec<&str> = dial.split('!').collect();
     if parts.is_empty() {
         return Err(Error::EmptyDialString);
@@ -275,48 +265,91 @@ fn parse_dial_string(dial: &str) -> Result<(String, String)> {
         return Err(Error::UnknownNetwork(proto.to_string()));
     }
 
-    if proto == "-" {
-        return Ok(("fd".to_string(), "nodev".to_string()));
-    }
+    let mut context = if proto == "-" {
+        return Ok(TransportContext {
+            addr: "nodev".to_string(),
+            options: vec!["rfdno=0".to_string(), "wfdno=1".to_string()],
+            trans: "fd".to_string(),
+        });
+    } else {
+        // need address part for all other protocols
+        if parts.len() < 2 {
+            return Err(Error::MissingDialAddress);
+        }
 
-    // need address part for all other protocols
-    if parts.len() < 2 {
-        return Err(Error::MissingDialAddress);
-    }
+        let addr = parts[1];
+        let mut options = Vec::new();
 
-    let addr = parts[1];
+        // for unix sockets, check accessibility
+        if proto == "unix"
+            && access(Path::new(addr), AccessFlags::R_OK | AccessFlags::W_OK).is_err()
+        {
+            return Err(Error::SocketAccess(addr.to_string()));
+        }
 
-    // for unix sockets, check accessibility
-    if proto == "unix" && access(Path::new(addr), AccessFlags::R_OK | AccessFlags::W_OK).is_err() {
-        return Err(Error::SocketAccess(addr.to_string()));
-    }
+        // for TCP, resolve hostname and port
+        let address = if proto == "tcp" {
+            let port = if parts.len() > 2 {
+                match parts[2].parse::<u16>() {
+                    Ok(p) => p,
+                    Err(_) => return Err(Error::InvalidPort(parts[2].to_string())),
+                }
+            } else {
+                564 // default 9P port
+            };
 
-    // for TCP, resolve hostname and port
-    let address = if proto == "tcp" {
-        let port = if parts.len() > 2 {
-            match parts[2].parse::<u16>() {
-                Ok(p) => p,
-                Err(_) => return Err(Error::InvalidPort(parts[2].to_string())),
-            }
+            let ip = resolve_to_ipv4(addr, port)?;
+
+            options.push(format!("port={port}"));
+
+            ip
         } else {
-            564 // default 9P port
+            // for unix and virtio, use address as is
+            addr.to_string()
         };
 
-        // resolve hostname to IP
-        match (addr, port).to_socket_addrs() {
-            Ok(mut addrs) => {
-                if let Some(socket_addr) = addrs.next() {
-                    socket_addr.ip().to_string()
-                } else {
-                    return Err(Error::HostResolution(addr.to_string()));
-                }
-            }
-            Err(_) => return Err(Error::HostResolution(addr.to_string())),
+        TransportContext {
+            addr: address,
+            options,
+            trans: proto.to_string(),
         }
-    } else {
-        // for unix and virtio, use address as is
-        addr.to_string()
     };
 
-    Ok((proto.to_string(), address))
+    context.options.push(format!("trans={}", context.trans));
+    Ok(context)
+}
+
+struct TransportContext {
+    addr: String,
+    options: Vec<String>,
+    trans: String,
+}
+
+fn resolve_to_ipv4(hostname: &str, port: u16) -> Result<String> {
+    use std::net::{IpAddr, ToSocketAddrs};
+
+    // First try direct IPv4 parsing - if it's already an IP address
+    if let Ok(ip) = hostname.parse::<std::net::IpAddr>() {
+        if let IpAddr::V4(ipv4) = ip {
+            return Ok(ipv4.to_string());
+        } else {
+            // It's a valid IPv6 address, but we need IPv4
+            return Err(Error::IPv6NotSupported(hostname.to_string()));
+        }
+    }
+
+    // Otherwise, use DNS resolution with IPv4 preference
+    let socket_addrs = (hostname, port)
+        .to_socket_addrs()
+        .map_err(|_| Error::HostResolution(hostname.to_string()))?;
+
+    // Find the first IPv4 address
+    for addr in socket_addrs {
+        if let IpAddr::V4(ipv4) = addr.ip() {
+            return Ok(ipv4.to_string());
+        }
+    }
+
+    // No IPv4 addresses found
+    Err(Error::NoIPv4Address(hostname.to_string()))
 }
