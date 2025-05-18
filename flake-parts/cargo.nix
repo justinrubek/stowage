@@ -47,6 +47,13 @@
           cargoArtifacts = deps-only;
         }
         // common-build-args);
+      mount = craneLib.buildPackage ({
+          pname = "stowage-cmd-mount";
+          cargoArtifacts = deps-only;
+          cargoExtraArgs = "--bin stowage-cmd-mount";
+          meta.mainProgram = "stowage-cmd-mount";
+        }
+        // common-build-args);
     };
 
     checks = {
