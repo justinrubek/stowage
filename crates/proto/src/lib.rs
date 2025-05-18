@@ -14,28 +14,12 @@ impl Decoder for Codec {
     type Error = Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>> {
-        // 9p messages start with a 4-byte size field
-        if src.len() < 4 {
-            return Ok(None);
-        }
-
-        // read the message size (including the size field)
-        let size = {
-            let mut size_bytes = [0u8; 4];
-            size_bytes.copy_from_slice(&src[..4]);
-            u32::from_le_bytes(size_bytes) as usize
-        };
-
-        // check if we have the complete message
-        if src.len() < size {
-            return Ok(None);
-        }
-
-        // skip the size field and retrieve the body
-        src.advance(4);
-        let mut message_body = src.split_to(size - 4);
+        let mut message_body = src.split();
         println!("dec: {:?}", message_body);
-        let message = Message::decode(&mut message_body)?;
+        let message = match Message::decode(&mut message_body) {
+            Ok(m) => m,
+            _ => return Ok(None),
+        };
 
         Ok(Some(message))
     }
@@ -45,24 +29,10 @@ impl Encoder<Message> for Codec {
     type Error = Error;
 
     fn encode(&mut self, item: Message, dst: &mut BytesMut) -> Result<()> {
-        // reserve space for message size + content
-        dst.reserve(1024);
-
-        // save current position to write size later
-        let start_pos = dst.len();
-
-        // add placeholder for size
-        dst.put_u32_le(0);
-
-        // encode the message
+        println!("item: {:?}", item);
+        (MessageType::from(item.clone()) as u8).encode_bytes(dst);
         item.encode(dst);
-
-        // calculate and write the actual size
-        let message_size = dst.len() - start_pos;
-        let size_bytes = u32::try_from(message_size)?.to_le_bytes();
-        dst[start_pos..start_pos + 4].copy_from_slice(&size_bytes);
         println!("enc: {:?}", dst);
-
         Ok(())
     }
 }
@@ -409,7 +379,7 @@ impl Message {
     }
 
     pub fn decode(buf: &mut BytesMut) -> Result<Self> {
-        if buf.len() < 3 {
+        if buf.len() < 1 {
             println!("decode: too small");
             return Err(Error::BufferTooSmall);
         }

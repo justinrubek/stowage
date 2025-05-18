@@ -7,7 +7,7 @@ use stowage_proto::{
     Twrite, Twstat, Txattrcreate, Txattrwalk,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_util::codec::Framed;
+use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 pub trait MessageHandler {
     // 9P Classic messages
@@ -294,8 +294,16 @@ where
     H: MessageHandler,
 {
     pub fn new(connection: T, handler: Arc<H>) -> Self {
+        let ldc = LengthDelimitedCodec::builder()
+            .length_field_offset(0)
+            .length_field_length(4)
+            .length_adjustment(-4)
+            .little_endian()
+            .new_framed(connection)
+            .map_codec(|_| Codec);
+
         Self {
-            connection: Framed::new(connection, Codec),
+            connection: ldc,
             handler,
         }
     }

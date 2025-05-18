@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
             let mut conn = Framed::new(stream, Codec);
 
             let version_tag = 0xFFFF;
-            let msize = 8192;
+            let mut msize = 8192;
 
             // version negotiation
             let version_msg = Message::Tversion(Tversion {
@@ -46,15 +46,15 @@ async fn main() -> Result<()> {
             if let Some(Ok(msg)) = conn.next().await {
                 match msg {
                     Message::Rversion(rversion) => {
-                        if rversion.version != "9P.2000L" {
+                        if rversion.version != "9P2000.L" {
                             return Err(Error::Other(format!(
                                 "server doesn't support 9P2000.L, got {}",
                                 rversion.version
                             )));
                         }
-                        let max_size = std::cmp::min(msize, rversion.msize);
+                        msize = std::cmp::min(msize, rversion.msize);
                         println!(
-                            "negotiation version: {} with msize: {}",
+                            "negotiated version: {} with msize: {}",
                             rversion.version, msize
                         );
                     }
