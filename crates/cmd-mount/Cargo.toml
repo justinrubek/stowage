@@ -1,6 +1,6 @@
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-nix = { version = "0.30", features = ["fs", "mount"] }
+nix = { version = "0.30", features = ["fs", "mount", "user"] }
 # serde = { workspace = true }
 # serde_json = { workspace = true }
 thiserror = { workspace = true }
