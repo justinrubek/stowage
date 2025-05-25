@@ -44,4 +44,5 @@ pub(crate) struct FileCommand {
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum FileCommands {
     Ls { path: Option<String> },
+    Cat { path: String },
 }

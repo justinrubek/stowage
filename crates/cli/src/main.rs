@@ -351,6 +351,216 @@ async fn main() -> Result<()> {
 
                     Ok(())
                 }
+
+                commands::FileCommands::Cat { path } => {
+                    info!("running: cat {path}");
+
+                    // 1. Attach to filesystem
+                    let mut root_fid = 2;
+                    let attach_msg = Tattach {
+                        fid: root_fid,
+                        afid: P9_NOFID,
+                        uname: String::from("nobody"),
+                        aname: String::from(""),
+                    };
+                    let tagged = TaggedMessage {
+                        message: Message::Tattach(attach_msg),
+                        tag,
+                    };
+                    conn.send(tagged).await?;
+
+                    // Handle attach response
+                    if let Some(Ok(msg)) = conn.next().await {
+                        match msg.message {
+                            Message::Rattach(_) => {
+                                // Successfully attached
+                            }
+                            Message::Rerror(err) => {
+                                return Err(Error::Other(format!(
+                                    "Failed to attach to filesystem: {}",
+                                    err.ename
+                                )));
+                            }
+                            _ => return Err(Error::Other("Unexpected response to Tattach".into())),
+                        }
+                    } else {
+                        return Err(Error::Other("No response to attach".into()));
+                    }
+
+                    // 2. Walk to the target file path
+                    let components: Vec<String> = path
+                        .split('/')
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                        .collect();
+
+                    if !components.is_empty() {
+                        let walk_msg = Twalk {
+                            fid: root_fid,
+                            newfid: root_fid + 1,
+                            wnames: components.clone(),
+                        };
+                        let tagged = TaggedMessage {
+                            message: Message::Twalk(walk_msg),
+                            tag,
+                        };
+                        conn.send(tagged).await?;
+
+                        if let Some(Ok(msg)) = conn.next().await {
+                            match msg.message {
+                                Message::Rwalk(rwalk) => {
+                                    if rwalk.wqids.len() != components.len() {
+                                        return Err(Error::Other(format!(
+                                            "File not found: {}",
+                                            path
+                                        )));
+                                    }
+                                    // Check if the target is a directory by examining the last qid
+                                    if let Some(last_qid) = rwalk.wqids.last() {
+                                        if last_qid.qtype & 0x80 != 0 {
+                                            // QTDIR bit
+                                            return Err(Error::Other(format!(
+                                                "cat: {}: Is a directory",
+                                                path
+                                            )));
+                                        }
+                                    }
+                                    // Update the root_fid to our walked fid
+                                    root_fid = root_fid + 1;
+                                }
+                                Message::Rerror(err) => {
+                                    return Err(Error::Other(format!(
+                                        "Failed to walk to file: {}",
+                                        err.ename
+                                    )));
+                                }
+                                _ => {
+                                    return Err(Error::Other("Unexpected response to Twalk".into()))
+                                }
+                            }
+                        } else {
+                            return Err(Error::Other("No response to walk".into()));
+                        }
+                    } else {
+                        // Root directory case
+                        return Err(Error::Other(format!("cat: {}: Is a directory", path)));
+                    }
+
+                    // 3. Open file for reading
+                    let open_msg = Topen {
+                        fid: root_fid,
+                        mode: 0, // OREAD
+                    };
+                    let tagged = TaggedMessage {
+                        message: Message::Topen(open_msg),
+                        tag,
+                    };
+                    conn.send(tagged).await?;
+
+                    // Handle open response and double-check if it's a directory
+                    if let Some(Ok(msg)) = conn.next().await {
+                        match msg.message {
+                            Message::Ropen(ropen) => {
+                                // Double-check: if qid indicates directory, return error
+                                if ropen.qid.qtype & 0x80 != 0 {
+                                    // QTDIR bit
+                                    return Err(Error::Other(format!(
+                                        "cat: {}: Is a directory",
+                                        path
+                                    )));
+                                }
+                                // File opened successfully
+                            }
+                            Message::Rerror(err) => {
+                                return Err(Error::Other(format!(
+                                    "Failed to open file: {}",
+                                    err.ename
+                                )));
+                            }
+                            _ => return Err(Error::Other("Unexpected response to Topen".into())),
+                        }
+                    } else {
+                        return Err(Error::Other("No response to open".into()));
+                    }
+
+                    // 4. Read file contents
+                    let mut offset: u64 = 0;
+                    let protocol_overhead = 100;
+                    let max_count = if msize > protocol_overhead {
+                        msize - protocol_overhead
+                    } else {
+                        4096
+                    };
+
+                    loop {
+                        // Send Tread request with current offset
+                        let tread = TaggedMessage::new(
+                            tag,
+                            Message::Tread(Tread {
+                                fid: root_fid,
+                                offset,
+                                count: max_count,
+                            }),
+                        );
+
+                        conn.send(tread).await?;
+
+                        if let Some(Ok(msg)) = conn.next().await {
+                            match msg.message {
+                                Message::Rread(rread) => {
+                                    match rread.data.len() {
+                                        0 => break, // End of file
+                                        _ => {
+                                            // Print the raw file content to stdout
+                                            print!("{}", String::from_utf8_lossy(&rread.data));
+
+                                            // Advance offset for next read
+                                            offset += rread.data.len() as u64;
+                                        }
+                                    }
+                                }
+                                Message::Rerror(err) => {
+                                    return Err(Error::Other(format!(
+                                        "Failed to read file: {}",
+                                        err.ename
+                                    )));
+                                }
+                                _ => {
+                                    return Err(Error::Other("Unexpected response to Tread".into()))
+                                }
+                            }
+                        } else {
+                            return Err(Error::Other("Connection closed".into()));
+                        }
+                    }
+
+                    // 5. Clunk the fid
+                    let clunk_msg = Tclunk { fid: root_fid };
+                    let tagged = TaggedMessage {
+                        message: Message::Tclunk(clunk_msg),
+                        tag,
+                    };
+                    conn.send(tagged).await?;
+
+                    // Handle clunk response (optional, but good practice)
+                    if let Some(Ok(msg)) = conn.next().await {
+                        match msg.message {
+                            Message::Rclunk(_) => {
+                                // Successfully closed file
+                            }
+                            Message::Rerror(err) => {
+                                // Non-fatal error
+                                eprintln!("Warning: Failed to clunk fid: {}", err.ename);
+                            }
+                            _ => {
+                                // Non-fatal error
+                                eprintln!("Warning: Unexpected response to Tclunk");
+                            }
+                        }
+                    }
+
+                    Ok(())
+                }
             }
         }
         Commands::Server(server) => {
