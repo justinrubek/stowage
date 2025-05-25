@@ -13,7 +13,6 @@ use std::{
     ffi::CString,
     fs::File,
     io::{BufRead, BufReader},
-    net::ToSocketAddrs,
     path::{Path, PathBuf},
 };
 use tracing::info;
@@ -332,10 +331,9 @@ fn resolve_to_ipv4(hostname: &str, port: u16) -> Result<String> {
     if let Ok(ip) = hostname.parse::<std::net::IpAddr>() {
         if let IpAddr::V4(ipv4) = ip {
             return Ok(ipv4.to_string());
-        } else {
-            // It's a valid IPv6 address, but we need IPv4
-            return Err(Error::IPv6NotSupported(hostname.to_string()));
         }
+
+        return Err(Error::IPv6NotSupported(hostname.to_string()));
     }
 
     // Otherwise, use DNS resolution with IPv4 preference

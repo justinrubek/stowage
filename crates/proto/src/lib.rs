@@ -8,7 +8,11 @@ pub mod consts;
 pub mod error;
 
 pub trait Protocol: Sized {
+    /// # Errors
+    /// - implementation specific
     fn encode(&self, buf: &mut BytesMut) -> Result<()>;
+    /// # Errors
+    /// - implementation specific
     fn decode(buf: &mut Cursor<&[u8]>) -> Result<Self>;
 
     /// calculate encoded size if known at compile time
@@ -50,6 +54,8 @@ pub enum MessageType {
 }
 
 impl MessageType {
+    /// # Errors
+    /// - the provided `value` is not a valid 9p message type
     pub fn from_u8(value: u8) -> Result<Self> {
         match value {
             100 => Ok(MessageType::Tversion),
@@ -83,6 +89,7 @@ impl MessageType {
         }
     }
 
+    #[must_use]
     pub fn to_u8(self) -> u8 {
         self as u8
     }
@@ -134,6 +141,8 @@ pub struct ParsedStat {
 }
 
 impl ParsedStat {
+    /// # Errors
+    /// - the data passed doesn't match the specific expected structure
     pub fn parse_from_bytes(data: &[u8]) -> Result<Self> {
         let mut cursor = Cursor::new(data);
 
@@ -166,6 +175,8 @@ impl ParsedStat {
         })
     }
 
+    /// # Errors
+    /// - failure to encode any of the fields
     pub fn to_bytes(&self) -> Result<Bytes> {
         let mut content_buf = BytesMut::new();
 
@@ -184,6 +195,8 @@ impl ParsedStat {
         Ok(content_buf.freeze())
     }
 
+    /// # Errors
+    /// - failure to encode any of the fields
     pub fn from_bytes(data: &Bytes) -> Result<Self> {
         let mut cursor = Cursor::new(data.as_ref());
         let _stat_size = u16::decode(&mut cursor)?; // read and ignore size
@@ -253,6 +266,11 @@ pub enum Message {
 }
 
 impl Message {
+    #[must_use]
+    pub fn error(ename: String) -> Message {
+        Message::Rerror(Rerror { ename })
+    }
+
     pub fn message_type(&self) -> MessageType {
         match self {
             Message::Tversion(_) => MessageType::Tversion,
@@ -498,6 +516,8 @@ impl Protocol for u64 {
 }
 
 impl Protocol for String {
+    /// # Errors
+    /// - string length overflows u16
     fn encode(&self, buf: &mut BytesMut) -> Result<()> {
         let bytes = self.as_bytes();
         if bytes.len() > u16::MAX as usize {
@@ -506,7 +526,7 @@ impl Protocol for String {
 
         // reserve space for length + string data
         buf.reserve(2 + bytes.len());
-        buf.put_u16_le(bytes.len() as u16);
+        buf.put_u16_le(u16::try_from(bytes.len()).unwrap()); // unwrap - checked above
         buf.put_slice(bytes);
         Ok(())
     }
@@ -527,9 +547,13 @@ impl Protocol for String {
 }
 
 impl Protocol for Bytes {
+    /// # Errors
+    /// - length exceeds u32 max
     fn encode(&self, buf: &mut BytesMut) -> Result<()> {
+        let len = u32::try_from(self.len()).map_err(|_| Error::BytesTooLong(self.len()))?;
+
         buf.reserve(4 + self.len());
-        buf.put_u32_le(self.len() as u32);
+        buf.put_u32_le(len);
         buf.put_slice(self);
         Ok(())
     }
@@ -576,14 +600,15 @@ impl<T: Protocol> Protocol for Vec<T> {
         if self.len() > u16::MAX as usize {
             return Err(Error::VectorTooLong(self.len()));
         }
+        let len = u16::try_from(self.len()).unwrap(); // unwrap - checked above
 
         let mut total_size = 2;
-        if let Some(item_size) = self.first().and_then(|item| item.encoded_size()) {
+        if let Some(item_size) = self.first().and_then(Protocol::encoded_size) {
             total_size += item_size * self.len();
             buf.reserve(total_size);
         }
 
-        (self.len() as u16).encode(buf)?;
+        len.encode(buf)?;
         for item in self {
             item.encode(buf)?;
         }
@@ -962,18 +987,18 @@ impl Protocol for Rstat {
     }
 
     fn decode(buf: &mut Cursor<&[u8]>) -> Result<Self> {
-        let stat_size = u16::decode(buf)? as usize;
-        if buf.remaining() < stat_size {
+        let stat_size = u16::decode(buf)?;
+        if buf.remaining() < (stat_size as usize) {
             return Err(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 "insufficient data for stat content",
             )));
         }
 
-        let mut stat_bytes = BytesMut::with_capacity(stat_size + 2);
-        (stat_size as u16).encode(&mut stat_bytes)?;
+        let mut stat_bytes = BytesMut::with_capacity(stat_size as usize + 2);
+        stat_size.encode(&mut stat_bytes)?;
 
-        let mut content = vec![0u8; stat_size];
+        let mut content = vec![0u8; stat_size as usize];
         buf.copy_to_slice(&mut content);
         stat_bytes.extend_from_slice(&content);
 
@@ -995,9 +1020,9 @@ impl Protocol for Twstat {
         let fid = u32::decode(buf)?;
 
         // read stat bytes directly - the stat structure contains its own size
-        let stat_size = u16::decode(buf)? as usize;
+        let stat_size = u16::decode(buf)?;
 
-        if buf.remaining() < stat_size {
+        if buf.remaining() < stat_size as usize {
             return Err(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 "insufficient data for stat content",
@@ -1005,10 +1030,10 @@ impl Protocol for Twstat {
         }
 
         // create a buffer with size + content
-        let mut stat_bytes = BytesMut::with_capacity(stat_size + 2);
-        (stat_size as u16).encode(&mut stat_bytes)?; // Put the size back
+        let mut stat_bytes = BytesMut::with_capacity(stat_size as usize + 2);
+        stat_size.encode(&mut stat_bytes)?; // Put the size back
 
-        let mut content = vec![0u8; stat_size];
+        let mut content = vec![0u8; stat_size as usize];
         buf.copy_to_slice(&mut content);
         stat_bytes.extend_from_slice(&content);
 
@@ -1062,7 +1087,7 @@ impl Protocol for Message {
         }
     }
 
-    /// This should not be called directly - use TaggedMessage::decode instead.
+    /// This should not be called directly - use `TaggedMessage::decode` instead.
     fn decode(_buf: &mut Cursor<&[u8]>) -> Result<Self> {
         Err(Error::Protocol(
             "Message::decode called directly".to_string(),
@@ -1121,6 +1146,7 @@ pub struct MessageCodec {
 }
 
 impl MessageCodec {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             length_codec: LengthDelimitedCodec::builder()
@@ -1143,7 +1169,7 @@ impl Decoder for MessageCodec {
     type Error = Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>> {
-        if let Some(frame) = self.length_codec.decode(src).map_err(|e| Error::Io(e))? {
+        if let Some(frame) = self.length_codec.decode(src).map_err(Error::Io)? {
             let mut cursor = Cursor::new(frame.as_ref());
             let message = TaggedMessage::decode(&mut cursor)?;
             Ok(Some(message))
@@ -1161,8 +1187,26 @@ impl Encoder<TaggedMessage> for MessageCodec {
         item.encode(&mut payload)?;
         self.length_codec
             .encode(payload.freeze(), dst)
-            .map_err(|e| Error::Io(e))?;
+            .map_err(Error::Io)?;
         Ok(())
+    }
+}
+
+impl Qid {
+    #[must_use]
+    pub fn from_log_format(path: u64, version: u32, qtype_char: char) -> Self {
+        let qtype = match qtype_char {
+            'd' => 0x80, // QTDIR
+            'a' => 0x40, // QTAPPEND
+            'l' => 0x02, // QTLINK
+            _ => 0x00,   // QTFILE
+        };
+
+        Self {
+            qtype,
+            version,
+            path,
+        }
     }
 }
 
@@ -1184,8 +1228,8 @@ mod tests {
                 path: 0x789,
             },
             mode: 0o644,
-            atime: 1000000,
-            mtime: 1000001,
+            atime: 1_000_000,
+            mtime: 1_000_001,
             length: 1024,
             name: "test.txt".to_string(),
             uid: "user".to_string(),
@@ -1214,7 +1258,7 @@ mod tests {
                 Message::Tauth(Tauth {
                     afid: 42,
                     uname: "user".to_string(),
-                    aname: "".to_string(),
+                    aname: String::new(),
                 }),
             ),
             TaggedMessage::new(
@@ -1280,17 +1324,17 @@ mod tests {
             dev: 0,
             qid: Qid {
                 qtype: 0x80, // 'd' for directory
-                version: 1747714478,
-                path: 0x1de955,
+                version: 1_747_714_478,
+                path: 0x1d_e955,
             },
-            mode: 0x800001ed, // From actual parsing but need to verify
-            atime: 1747800895,
-            mtime: 1747714478,
+            mode: 0x8000_01ed, // From actual parsing but need to verify
+            atime: 1_747_800_895,
+            mtime: 1_747_714_478,
             length: 0,
-            name: "".to_string(),
+            name: String::new(),
             uid: "justin".to_string(),
             gid: "users".to_string(),
-            muid: "".to_string(),
+            muid: String::new(),
         }
         .to_bytes()?;
 
@@ -1313,15 +1357,15 @@ mod tests {
         );
 
         // They should match now!
-        if buf.as_ref() != actual_rstat_bytes {
+        if buf.as_ref() == actual_rstat_bytes {
+            println!("✓ Perfect match!");
+        } else {
             println!("Still a mismatch - let me analyze the actual values...");
 
-            // Let's decode the actual bytes to see what the real values should be
+            // let's decode the actual bytes to see what the real values should be
             let mut cursor = Cursor::new(&actual_rstat_bytes[..]);
             let decoded_rstat = Rstat::decode(&mut cursor)?;
-            println!("Decoded from actual bytes: {:?}", decoded_rstat);
-        } else {
-            println!("✓ Perfect match!");
+            println!("Decoded from actual bytes: {decoded_rstat:?}");
         }
 
         Ok(())
@@ -1375,7 +1419,7 @@ mod tests {
             }
         }
 
-        println!("Successfully decoded {} client messages", message_count);
+        println!("Successfully decoded {message_count} client messages");
     }
 
     #[test]
@@ -1407,48 +1451,7 @@ mod tests {
             }
         }
 
-        println!("Successfully decoded {} server messages", message_count);
-    }
-
-    // Helper to re-encode a message and compare bytes
-    fn verify_byte_perfect_encoding(original_bytes: &[u8], message: &TaggedMessage) -> Result<()> {
-        let mut codec = MessageCodec::new();
-        let mut encoded_buf = BytesMut::new();
-        codec.encode(message.clone(), &mut encoded_buf)?;
-
-        if original_bytes != encoded_buf.as_ref() {
-            println!(
-                "BYTE MISMATCH for {:?} tag {}",
-                message.message_type(),
-                message.tag
-            );
-            println!("Original: {}", hex::encode(original_bytes));
-            println!("Encoded:  {}", hex::encode(&encoded_buf));
-            println!(
-                "Expected length: {}, Got length: {}",
-                original_bytes.len(),
-                encoded_buf.len()
-            );
-
-            // Find first difference
-            for (i, (a, b)) in original_bytes.iter().zip(encoded_buf.iter()).enumerate() {
-                if a != b {
-                    println!(
-                        "First difference at byte {}: expected 0x{:02x}, got 0x{:02x}",
-                        i, a, b
-                    );
-                    break;
-                }
-            }
-
-            return Err(Error::Protocol(format!(
-                "Encoded bytes don't match original for {:?} tag {}",
-                message.message_type(),
-                message.tag
-            )));
-        }
-
-        Ok(())
+        println!("Successfully decoded {message_count} server messages");
     }
 
     #[test]
@@ -1457,15 +1460,15 @@ mod tests {
         let stat = ParsedStat {
             r#type: 0,
             dev: 0,
-            qid: Qid::from_log_format(0x1de955, 1747714478, 'd'),
-            mode: 0o755 | 0x80000000, // Need to figure out the exact mode from the log
-            atime: 1747800895,
-            mtime: 1747714478,
+            qid: Qid::from_log_format(0x1d_e955, 1_747_714_478, 'd'),
+            mode: 0o755 | 0x8000_0000, // Need to figure out the exact mode from the log
+            atime: 1_747_800_895,
+            mtime: 1_747_714_478,
             length: 0,
-            name: "".to_string(),
+            name: String::new(),
             uid: "justin".to_string(),
             gid: "users".to_string(),
-            muid: "".to_string(),
+            muid: String::new(),
         };
         let stat_bytes = stat.to_bytes()?;
 
@@ -1487,7 +1490,7 @@ mod tests {
             TaggedMessage::new(
                 65535,
                 Message::Tversion(Tversion {
-                    msize: 131096,
+                    msize: 131_096,
                     version: "9P2000".to_string(),
                 }),
             ),
@@ -1502,15 +1505,15 @@ mod tests {
                 0,
                 Message::Tattach(Tattach {
                     fid: 0,
-                    afid: 0xFFFFFFFF, // -1 as u32
+                    afid: 0xFFFF_FFFF, // -1 as u32
                     uname: "justin".to_string(),
-                    aname: "".to_string(),
+                    aname: String::new(),
                 }),
             ),
             TaggedMessage::new(
                 0,
                 Message::Rattach(Rattach {
-                    qid: Qid::from_log_format(0x1de955, 1747714478, 'd'),
+                    qid: Qid::from_log_format(0x1de_955, 1_747_714_478, 'd'),
                 }),
             ),
             TaggedMessage::new(
@@ -1568,9 +1571,9 @@ mod tests {
         // Test that afid value of -1 is properly handled as 0xFFFFFFFF
         let tattach = Tattach {
             fid: 0,
-            afid: 0xFFFFFFFF, // -1 as u32
+            afid: 0xFFFF_FFFF, // -1 as u32
             uname: "justin".to_string(),
-            aname: "".to_string(),
+            aname: String::new(),
         };
 
         let mut buf = BytesMut::new();
@@ -1590,7 +1593,7 @@ mod tests {
     #[test]
     fn test_qid_encoding() -> Result<()> {
         // Test the specific qid from the log: (00000000001de955 1747714478 d)
-        let qid = Qid::from_log_format(0x1de955, 1747714478, 'd');
+        let qid = Qid::from_log_format(0x1de_955, 1_747_714_478, 'd');
 
         let mut buf = BytesMut::new();
         qid.encode(&mut buf)?;
@@ -1600,11 +1603,11 @@ mod tests {
         assert_eq!(buf[0], 0x80); // 'd' -> QTDIR
 
         // version: 1747714478 in little endian
-        let version_bytes = 1747714478u32.to_le_bytes();
+        let version_bytes = 1_747_714_478_u32.to_le_bytes();
         assert_eq!(&buf[1..5], &version_bytes);
 
         // path: 0x1de955 in little endian
-        let path_bytes = 0x1de955u64.to_le_bytes();
+        let path_bytes = 0x1de_955_u64.to_le_bytes();
         assert_eq!(&buf[5..13], &path_bytes);
 
         let mut cursor = Cursor::new(buf.as_ref());
@@ -1612,13 +1615,6 @@ mod tests {
 
         assert_eq!(qid, decoded);
         Ok(())
-    }
-
-    // Helper to decode the Rread hex data from the log
-    fn decode_hex_data(hex_str: &str) -> Bytes {
-        let cleaned = hex_str.replace(' ', "");
-        let bytes = hex::decode(cleaned).expect("Invalid hex string");
-        Bytes::from(bytes)
     }
 
     #[test]
@@ -1708,7 +1704,9 @@ mod tests {
             codec.encode(decoded.clone(), &mut encoded_buf)?;
 
             // Compare the bytes
-            if raw_bytes.as_ref() != encoded_buf.as_ref() {
+            if raw_bytes.as_ref() == encoded_buf.as_ref() {
+                println!("✓ Perfect byte match");
+            } else {
                 println!(
                     "BYTE MISMATCH for {:?} tag {}",
                     decoded.message_type(),
@@ -1728,18 +1726,13 @@ mod tests {
                 // Find first difference
                 for (j, (a, b)) in raw_bytes.iter().zip(encoded_buf.iter()).enumerate() {
                     if a != b {
-                        println!(
-                            "First difference at byte {}: expected 0x{:02x}, got 0x{:02x}",
-                            j, a, b
-                        );
+                        println!("First difference at byte {j}: expected 0x{a:02x}, got 0x{b:02x}");
                         break;
                     }
                 }
 
                 // For now, don't fail the test - just report the differences
                 println!("Continuing despite mismatch...");
-            } else {
-                println!("✓ Perfect byte match");
             }
         }
 
@@ -1765,7 +1758,9 @@ mod tests {
 
             codec.encode(decoded.clone(), &mut encoded_buf)?;
 
-            if raw_bytes.as_ref() != encoded_buf.as_ref() {
+            if raw_bytes.as_ref() == encoded_buf.as_ref() {
+                println!("✓ Perfect byte match");
+            } else {
                 println!(
                     "BYTE MISMATCH for {:?} tag {}",
                     decoded.message_type(),
@@ -1784,8 +1779,6 @@ mod tests {
 
                 // Don't fail - just report for now
                 println!("Continuing despite mismatch...");
-            } else {
-                println!("✓ Perfect byte match");
             }
         }
 
@@ -1923,22 +1916,5 @@ mod tests {
         }
 
         Ok(messages)
-    }
-}
-
-impl Qid {
-    pub fn from_log_format(path: u64, version: u32, qtype_char: char) -> Self {
-        let qtype = match qtype_char {
-            'd' => 0x80, // QTDIR
-            'a' => 0x40, // QTAPPEND
-            'l' => 0x02, // QTLINK
-            _ => 0x00,   // QTFILE
-        };
-
-        Self {
-            qtype,
-            version,
-            path,
-        }
     }
 }

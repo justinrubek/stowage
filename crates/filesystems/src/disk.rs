@@ -4,12 +4,10 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
-use stowage_proto::consts::{EIO, ENOTDIR, EOPNOTSUPP};
 use stowage_proto::{
-    Message, ParsedStat, Qid, QidType, Rattach, Rauth, Rclunk, Rcreate, Rerror, Rflush, Ropen,
-    Rread, Rremove, Rstat, Rversion, Rwalk, Rwrite, Rwstat, Tattach, Tauth, Tclunk, Tcreate,
-    Tflush, Topen, Tread, Tremove, Tstat, Tversion, Twalk, Twrite, Twstat,
+    Message, ParsedStat, Qid, QidType, Rattach, Rclunk, Rcreate, Rerror, Rflush, Ropen, Rread,
+    Rremove, Rstat, Rwalk, Rwrite, Rwstat, Tattach, Tclunk, Tcreate, Tflush, Topen, Tread, Tremove,
+    Tstat, Twalk, Twrite, Twstat,
 };
 use stowage_service::MessageHandler;
 
@@ -48,64 +46,9 @@ impl Handler {
             None => Err(io::Error::new(io::ErrorKind::NotFound, "fid not found")),
         }
     }
-
-    fn create_qid_from_metadata(&self, metadata: &fs::Metadata) -> Qid {
-        let qtype = if metadata.is_dir() {
-            QidType::Dir as u8
-        } else if metadata.is_symlink() {
-            QidType::File as u8 // 9P2000 doesn't have a specific symlink type
-        } else {
-            QidType::File as u8
-        };
-
-        Qid {
-            qtype,
-            version: 0, // version is not tracked in this implementation
-            path: metadata.ino(),
-        }
-    }
-
-    fn stat_from_metadata(&self, metadata: &fs::Metadata, path: &Path) -> ParsedStat {
-        let qid = self.create_qid_from_metadata(metadata);
-
-        ParsedStat {
-            r#type: qid.qtype as u16,
-            dev: 0, // not needed for this implementation
-            qid: qid,
-            mode: metadata.mode(),
-            atime: metadata.atime() as u32,
-            mtime: metadata.mtime() as u32,
-            length: metadata.len(),
-            name: path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string(),
-            uid: metadata.uid().to_string(),
-            gid: metadata.gid().to_string(),
-            muid: "".to_string(), // not tracked in this implementation
-        }
-    }
 }
 
 impl MessageHandler for Handler {
-    async fn version(&self, message: &Tversion) -> Message {
-        Message::Rversion(Rversion {
-            msize: message.msize.min(8192),
-            version: match message.version.as_ref() {
-                "9P2000" => message.version.to_string(),
-                _ => "unknown".to_string(),
-            },
-        })
-    }
-
-    async fn auth(&self, message: &Tauth) -> Message {
-        // Auth is not implemented, return error
-        Message::Rerror(Rerror {
-            ename: "Authentication not required".to_string(),
-        })
-    }
-
     async fn attach(&self, message: &Tattach) -> Message {
         // establish a new fid that points to the root directory
         let root_path = self.dir.clone();
@@ -120,7 +63,7 @@ impl MessageHandler for Handler {
                 }
 
                 // create a qid for the root directory
-                let qid = self.create_qid_from_metadata(&metadata);
+                let qid = create_qid_from_metadata(&metadata);
 
                 // store this fid in our mapping
                 let mut fids = self.fids.lock().unwrap();
@@ -137,12 +80,12 @@ impl MessageHandler for Handler {
                 Message::Rattach(Rattach { qid })
             }
             Err(e) => Message::Rerror(Rerror {
-                ename: format!("Cannot attach: {}", e),
+                ename: format!("Cannot attach: {e}"),
             }),
         }
     }
 
-    async fn flush(&self, message: &Tflush) -> Message {
+    async fn flush(&self, _: &Tflush) -> Message {
         // flush doesn't need special file operations for this implementation
         // it simply acknowledges the flush request
         Message::Rflush(Rflush)
@@ -154,13 +97,10 @@ impl MessageHandler for Handler {
         let wnames = message.wnames.clone();
 
         // get the source path
-        let source_path = match self.path_for_fid(fid) {
-            Ok(path) => path,
-            Err(_) => {
-                return Message::Rerror(Rerror {
-                    ename: "Fid not found".to_string(),
-                })
-            }
+        let Ok(source_path) = self.path_for_fid(fid) else {
+            return Message::Rerror(Rerror {
+                ename: "Fid not found".to_string(),
+            });
         };
 
         // if newfid differs from fid, clone the fid
@@ -202,20 +142,17 @@ impl MessageHandler for Handler {
         for wname in &wnames {
             current_path = current_path.join(wname);
 
-            match fs::metadata(&current_path) {
-                Ok(metadata) => {
-                    let qid = self.create_qid_from_metadata(&metadata);
-                    wqids.push(qid);
+            if let Ok(metadata) = fs::metadata(&current_path) {
+                let qid = create_qid_from_metadata(&metadata);
+                wqids.push(qid);
+            } else {
+                // path component not found, return what we have
+                if wqids.is_empty() {
+                    return Message::Rerror(Rerror {
+                        ename: "File not found".to_string(),
+                    });
                 }
-                Err(_) => {
-                    // path component not found, return what we have
-                    if wqids.is_empty() {
-                        return Message::Rerror(Rerror {
-                            ename: "File not found".to_string(),
-                        });
-                    }
-                    break;
-                }
+                break;
             }
         }
 
@@ -223,7 +160,7 @@ impl MessageHandler for Handler {
         if wqids.len() == wnames.len() {
             let mut fids = self.fids.lock().unwrap();
             if let Some(entry) = fids.get_mut(&newfid) {
-                entry.path = current_path.clone();
+                entry.path.clone_from(&current_path);
                 entry.is_dir = fs::metadata(&current_path)
                     .map(|m| m.is_dir())
                     .unwrap_or(false);
@@ -237,13 +174,10 @@ impl MessageHandler for Handler {
         let fid = message.fid;
         let mode = message.mode;
 
-        let path = match self.path_for_fid(fid) {
-            Ok(path) => path,
-            Err(_) => {
-                return Message::Rerror(Rerror {
-                    ename: "Fid not found".to_string(),
-                })
-            }
+        let Ok(path) = self.path_for_fid(fid) else {
+            return Message::Rerror(Rerror {
+                ename: "Fid not found".to_string(),
+            });
         };
 
         // convert 9P2000 open modes to rust file open options
@@ -271,7 +205,7 @@ impl MessageHandler for Handler {
         }
 
         // attempt to open the file
-        let result = if fs::metadata(&path).map_or(false, |m| m.is_dir()) {
+        let result = if fs::metadata(&path).is_ok_and(|m| m.is_dir()) {
             // for directories, just get metadata and don't actually open a file
             Ok(None)
         } else {
@@ -282,7 +216,7 @@ impl MessageHandler for Handler {
             Ok(file_opt) => {
                 match fs::metadata(&path) {
                     Ok(metadata) => {
-                        let qid = self.create_qid_from_metadata(&metadata);
+                        let qid = create_qid_from_metadata(&metadata);
                         let is_dir = metadata.is_dir();
 
                         // update the fid entry
@@ -299,12 +233,12 @@ impl MessageHandler for Handler {
                         Message::Ropen(Ropen { qid, iounit })
                     }
                     Err(e) => Message::Rerror(Rerror {
-                        ename: format!("Cannot stat file: {}", e),
+                        ename: format!("Cannot stat file: {e}"),
                     }),
                 }
             }
             Err(e) => Message::Rerror(Rerror {
-                ename: format!("Cannot open file: {}", e),
+                ename: format!("Cannot open file: {e}"),
             }),
         }
     }
@@ -315,13 +249,8 @@ impl MessageHandler for Handler {
         let perm = message.perm;
         let mode = message.mode;
 
-        let dir_path = match self.path_for_fid(fid) {
-            Ok(path) => path,
-            Err(_) => {
-                return Message::Rerror(Rerror {
-                    ename: "Fid not found".to_string(),
-                })
-            }
+        let Ok(dir_path) = self.path_for_fid(fid) else {
+            return Message::error("Fid not found".to_string());
         };
 
         // check if the parent is a directory
@@ -333,11 +262,7 @@ impl MessageHandler for Handler {
                     });
                 }
             }
-            Err(e) => {
-                return Message::Rerror(Rerror {
-                    ename: format!("Cannot stat directory: {}", e),
-                })
-            }
+            Err(e) => return Message::error(format!("Cannot stat directory: {e}")),
         }
 
         // prepare the new file path
@@ -358,20 +283,16 @@ impl MessageHandler for Handler {
             O_RDWR => {
                 options.read(true).write(true);
             }
-            _ => {
-                return Message::Rerror(Rerror {
-                    ename: "Invalid open mode".to_string(),
-                })
-            }
+            _ => return Message::error("Invalid open mode".to_string()),
         }
 
         // Check if it's a directory create request
-        let is_dir = (perm & 0x80000000) != 0;
+        let is_dir = (perm & 0x8000_0000) != 0;
 
         // Handle directory creation
         if is_dir {
             match fs::create_dir(&file_path) {
-                Ok(_) => {
+                Ok(()) => {
                     // Set permissions
                     #[cfg(unix)]
                     {
@@ -383,7 +304,7 @@ impl MessageHandler for Handler {
 
                     match fs::metadata(&file_path) {
                         Ok(metadata) => {
-                            let qid = self.create_qid_from_metadata(&metadata);
+                            let qid = create_qid_from_metadata(&metadata);
 
                             // Update the fid to point to the new directory
                             let mut fids = self.fids.lock().unwrap();
@@ -397,13 +318,11 @@ impl MessageHandler for Handler {
                             Message::Rcreate(Rcreate { qid, iounit: 4096 })
                         }
                         Err(e) => Message::Rerror(Rerror {
-                            ename: format!("Cannot stat new directory: {}", e),
+                            ename: format!("Cannot stat new directory: {e}"),
                         }),
                     }
                 }
-                Err(e) => Message::Rerror(Rerror {
-                    ename: format!("Cannot create directory: {}", e),
-                }),
+                Err(e) => Message::error(format!("Cannot create directory: {e}")),
             }
         } else {
             // Handle regular file creation
@@ -420,7 +339,7 @@ impl MessageHandler for Handler {
 
                     match fs::metadata(&file_path) {
                         Ok(metadata) => {
-                            let qid = self.create_qid_from_metadata(&metadata);
+                            let qid = create_qid_from_metadata(&metadata);
 
                             // update the fid entry to point to the new file
                             let mut fids = self.fids.lock().unwrap();
@@ -433,14 +352,10 @@ impl MessageHandler for Handler {
 
                             Message::Rcreate(Rcreate { qid, iounit: 4096 })
                         }
-                        Err(e) => Message::Rerror(Rerror {
-                            ename: format!("Cannot stat new file: {}", e),
-                        }),
+                        Err(e) => Message::error(format!("Cannot stat new file: {e}")),
                     }
                 }
-                Err(e) => Message::Rerror(Rerror {
-                    ename: format!("Cannot create file: {}", e),
-                }),
+                Err(e) => Message::error(format!("Cannot create file: {e}")),
             }
         }
     }
@@ -452,13 +367,10 @@ impl MessageHandler for Handler {
 
         // get the fid entry
         let mut fids = self.fids.lock().unwrap();
-        let entry = match fids.get_mut(&fid) {
-            Some(entry) => entry,
-            None => {
-                return Message::Rerror(Rerror {
-                    ename: "Fid not found".to_string(),
-                })
-            }
+        let Some(entry) = fids.get_mut(&fid) else {
+            return Message::Rerror(Rerror {
+                ename: "Fid not found".to_string(),
+            });
         };
 
         // ensure the file is opened
@@ -484,47 +396,42 @@ impl MessageHandler for Handler {
                     let entries: Vec<_> = read_dir.collect();
                     let entries_to_process = entries
                         .into_iter()
-                        .skip(offset as usize)
+                        .skip(usize::try_from(offset).unwrap())
                         .take(count as usize / 128); // Rough estimate of stat size
 
-                    for entry_result in entries_to_process {
-                        if let Ok(dir_entry) = entry_result {
-                            if let Ok(metadata) = dir_entry.metadata() {
-                                // Create a stat for each entry
-                                let stat = self.stat_from_metadata(&metadata, &dir_entry.path());
+                    for dir_entry in entries_to_process.flatten() {
+                        if let Ok(metadata) = dir_entry.metadata() {
+                            // Create a stat for each entry
+                            let _stat = stat_from_metadata(&metadata, &dir_entry.path());
 
-                                // Encode the stat structure to bytes
-                                // This is simplified - you would need proper encoding logic here
-                                // to serialize the stat structure
+                            // Encode the stat structure to bytes
+                            // This is simplified - you would need proper encoding logic here
+                            // to serialize the stat structure
 
-                                // For this example, we'll just append some placeholder data
-                                // In a real implementation, you would encode each stat structure
-                                data.extend_from_slice(&[0; 128]); // Placeholder
-                            }
+                            // For this example, we'll just append some placeholder data
+                            // In a real implementation, you would encode each stat structure
+                            data.extend_from_slice(&[0; 128]); // Placeholder
                         }
                     }
 
                     Message::Rread(Rread { data: data.into() })
                 }
                 Err(e) => Message::Rerror(Rerror {
-                    ename: format!("Cannot read directory: {}", e),
+                    ename: format!("Cannot read directory: {e}"),
                 }),
             }
         } else {
             // read from regular file
-            let file = match &mut entry.file {
-                Some(file) => file,
-                None => {
-                    return Message::Rerror(Rerror {
-                        ename: "No file handle".to_string(),
-                    })
-                }
+            let Some(file) = &mut entry.file else {
+                return Message::Rerror(Rerror {
+                    ename: "No file handle".to_string(),
+                });
             };
 
             // seek to the offset
             if let Err(e) = file.seek(SeekFrom::Start(offset)) {
                 return Message::Rerror(Rerror {
-                    ename: format!("Seek error: {}", e),
+                    ename: format!("Seek error: {e}"),
                 });
             }
 
@@ -538,7 +445,7 @@ impl MessageHandler for Handler {
                     })
                 }
                 Err(e) => Message::Rerror(Rerror {
-                    ename: format!("Read error: {}", e),
+                    ename: format!("Read error: {e}"),
                 }),
             }
         }
@@ -551,13 +458,10 @@ impl MessageHandler for Handler {
 
         // get the fid entry
         let mut fids = self.fids.lock().unwrap();
-        let entry = match fids.get_mut(&fid) {
-            Some(entry) => entry,
-            None => {
-                return Message::Rerror(Rerror {
-                    ename: "Fid not found".to_string(),
-                })
-            }
+        let Some(entry) = fids.get_mut(&fid) else {
+            return Message::Rerror(Rerror {
+                ename: "Fid not found".to_string(),
+            });
         };
 
         // ensure the file is opened
@@ -568,29 +472,26 @@ impl MessageHandler for Handler {
         }
 
         // get the file handle
-        let file = match &mut entry.file {
-            Some(file) => file,
-            None => {
-                return Message::Rerror(Rerror {
-                    ename: "No file handle".to_string(),
-                })
-            }
+        let Some(file) = &mut entry.file else {
+            return Message::Rerror(Rerror {
+                ename: "No file handle".to_string(),
+            });
         };
 
         // seek to the offset
         if let Err(e) = file.seek(SeekFrom::Start(offset)) {
             return Message::Rerror(Rerror {
-                ename: format!("Seek error: {}", e),
+                ename: format!("Seek error: {e}"),
             });
         }
 
         // write the data
         match file.write(&data) {
             Ok(count) => Message::Rwrite(Rwrite {
-                count: count as u32,
+                count: u32::try_from(count).unwrap(), // unwrap - 9p data cannot exceed u32 size
             }),
             Err(e) => Message::Rerror(Rerror {
-                ename: format!("Write error: {}", e),
+                ename: format!("Write error: {e}"),
             }),
         }
     }
@@ -602,7 +503,7 @@ impl MessageHandler for Handler {
         let mut fids = self.fids.lock().unwrap();
 
         // close any open file handle before removing
-        if let Some(_) = fids.remove(&fid) {
+        if fids.remove(&fid).is_some() {
             // file will be closed when dropped by remove
         }
 
@@ -614,13 +515,10 @@ impl MessageHandler for Handler {
         let fid = message.fid;
 
         // get the path
-        let path = match self.path_for_fid(fid) {
-            Ok(path) => path,
-            Err(_) => {
-                return Message::Rerror(Rerror {
-                    ename: "Fid not found".to_string(),
-                })
-            }
+        let Ok(path) = self.path_for_fid(fid) else {
+            return Message::Rerror(Rerror {
+                ename: "Fid not found".to_string(),
+            });
         };
 
         // remove the fid from the map first (similar to clunk)
@@ -635,9 +533,9 @@ impl MessageHandler for Handler {
         };
 
         match result {
-            Ok(_) => Message::Rremove(Rremove),
+            Ok(()) => Message::Rremove(Rremove),
             Err(e) => Message::Rerror(Rerror {
-                ename: format!("Remove error: {}", e),
+                ename: format!("Remove error: {e}"),
             }),
         }
     }
@@ -646,59 +544,47 @@ impl MessageHandler for Handler {
         let fid = message.fid;
 
         // get the path and metadata for this fid
-        let path = match self.path_for_fid(fid) {
-            Ok(path) => path,
-            Err(_) => {
-                return Message::Rerror(Rerror {
-                    ename: "Fid not found".to_string(),
-                })
-            }
+        let Ok(path) = self.path_for_fid(fid) else {
+            return Message::Rerror(Rerror {
+                ename: "Fid not found".to_string(),
+            });
         };
 
         match fs::metadata(&path) {
             Ok(metadata) => {
-                let stat = self.stat_from_metadata(&metadata, &path);
-                let bytes = match stat.to_bytes() {
-                    Ok(bytes) => bytes,
-                    Err(_) => {
-                        return Message::Rerror(Rerror {
-                            ename: "failed to encode stat".to_string(),
-                        })
-                    }
+                let stat = stat_from_metadata(&metadata, &path);
+                let Ok(bytes) = stat.to_bytes() else {
+                    return Message::Rerror(Rerror {
+                        ename: "failed to encode stat".to_string(),
+                    });
                 };
                 Message::Rstat(Rstat { stat: bytes })
             }
             Err(e) => Message::Rerror(Rerror {
-                ename: format!("Stat error: {}", e),
+                ename: format!("Stat error: {e}"),
             }),
         }
     }
 
     async fn wstat(&self, message: &Twstat) -> Message {
         let fid = message.fid;
-        let stat = match ParsedStat::parse_from_bytes(message.stat.as_ref()) {
-            Ok(stat) => stat,
-            Err(_) => {
-                return Message::Rerror(Rerror {
-                    ename: "failed to parse stat".to_string(),
-                })
-            }
+        let Ok(stat) = ParsedStat::parse_from_bytes(message.stat.as_ref()) else {
+            return Message::Rerror(Rerror {
+                ename: "failed to parse stat".to_string(),
+            });
         };
 
         // get the path
-        let path = match self.path_for_fid(fid) {
-            Ok(path) => path,
-            Err(_) => {
-                return Message::Rerror(Rerror {
-                    ename: "Fid not found".to_string(),
-                })
-            }
+        let Ok(path) = self.path_for_fid(fid) else {
+            return Message::Rerror(Rerror {
+                ename: "Fid not found".to_string(),
+            });
         };
 
         let mut error = None;
 
         // change permissions if mode is not ~0
-        if stat.mode != 0xFFFFFFFF {
+        if stat.mode != 0xFFFF_FFFF {
             #[cfg(unix)]
             {
                 if let Ok(mut perms) = fs::metadata(&path).map(|m| m.permissions()) {
@@ -707,20 +593,17 @@ impl MessageHandler for Handler {
                         error = Some(e);
                     }
                 } else {
-                    error = Some(io::Error::new(
-                        io::ErrorKind::Other,
-                        "Failed to get permissions",
-                    ));
+                    error = Some(io::Error::other("Failed to get permissions"));
                 }
             }
         }
 
         // change file size if length is not ~0
-        if error.is_none() && stat.length != 0xFFFFFFFFFFFFFFFF {
+        if error.is_none() && stat.length != 0xFFFF_FFFF_FFFF_FFFF {
             if let Err(e) = fs::OpenOptions::new()
                 .write(true)
                 .open(&path)
-                .and_then(|mut file| file.set_len(stat.length))
+                .and_then(|file| file.set_len(stat.length))
             {
                 error = Some(e);
             }
@@ -748,9 +631,45 @@ impl MessageHandler for Handler {
 
         match error {
             Some(e) => Message::Rerror(Rerror {
-                ename: format!("Cannot change file attributes: {}", e),
+                ename: format!("Cannot change file attributes: {e}"),
             }),
             None => Message::Rwstat(Rwstat),
         }
+    }
+}
+
+fn create_qid_from_metadata(metadata: &fs::Metadata) -> Qid {
+    let qtype = if metadata.is_dir() {
+        QidType::Dir as u8
+    } else {
+        QidType::File as u8
+    };
+
+    Qid {
+        qtype,
+        version: 0, // version is not tracked in this implementation
+        path: metadata.ino(),
+    }
+}
+
+fn stat_from_metadata(metadata: &fs::Metadata, path: &Path) -> ParsedStat {
+    let qid = create_qid_from_metadata(metadata);
+
+    ParsedStat {
+        r#type: u16::from(qid.qtype),
+        dev: 0, // not needed for this implementation
+        qid,
+        mode: metadata.mode(),
+        atime: u32::try_from(metadata.atime()).unwrap(),
+        mtime: u32::try_from(metadata.mtime()).unwrap(),
+        length: metadata.len(),
+        name: path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string(),
+        uid: metadata.uid().to_string(),
+        gid: metadata.gid().to_string(),
+        muid: String::new(), // not tracked in this implementation
     }
 }

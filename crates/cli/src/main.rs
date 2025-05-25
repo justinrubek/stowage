@@ -2,15 +2,15 @@ use crate::{
     commands::{Commands, ServerCommands},
     error::Result,
 };
-use bytes::{Buf, BytesMut};
+use bytes::BytesMut;
 use clap::Parser;
 use error::Error;
 use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
 use stowage_filesystems::disk::Handler;
 use stowage_proto::{
-    consts::P9_NOFID, Message, MessageCodec, ParsedStat, Protocol, Rversion, TaggedMessage,
-    Tattach, Tauth, Tclunk, Tcreate, Topen, Tread, Tstat, Tversion, Twalk, Twrite, Twstat,
+    consts::P9_NOFID, Message, MessageCodec, ParsedStat, TaggedMessage, Tattach, Tauth, Tclunk,
+    Tcreate, Topen, Tread, Tstat, Tversion, Twalk, Twrite, Twstat,
 };
 use stowage_service::Plan9;
 use tokio::net::{TcpListener, TcpStream};
@@ -131,7 +131,7 @@ async fn perform_authentication(conn: &mut Connection, tag: u16) -> Result<()> {
     let auth_msg = Tauth {
         afid,
         uname: String::from("nobody"),
-        aname: String::from(""),
+        aname: String::new(),
     };
     let tagged = TaggedMessage {
         message: Message::Tauth(auth_msg),
@@ -159,7 +159,7 @@ async fn attach_to_filesystem(conn: &mut Connection, tag: u16) -> Result<()> {
         fid: root_fid,
         afid: P9_NOFID,
         uname: String::from("nobody"),
-        aname: String::from(""),
+        aname: String::new(),
     };
     let tagged = TaggedMessage {
         message: Message::Tattach(attach_msg),
@@ -194,7 +194,7 @@ async fn receive_message(conn: &mut Connection) -> Result<TaggedMessage> {
 fn parse_path_components(path: &str) -> Vec<String> {
     path.split('/')
         .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .collect()
 }
 
@@ -248,7 +248,7 @@ async fn cleanup_fid(conn: &mut Connection, tag: u16, fid: u32) -> Result<()> {
                 eprintln!("Warning: Failed to clunk fid {}: {}", fid, err.ename);
             }
             _ => {
-                eprintln!("Warning: Unexpected response to Tclunk for fid {}", fid);
+                eprintln!("Warning: Unexpected response to Tclunk for fid {fid}");
             }
         }
     }
@@ -273,9 +273,9 @@ async fn ls_command(
         if !components.is_empty() {
             let walk_success = walk_to_path(conn, tag, root_fid, root_fid + 1, &path).await?;
             if !walk_success {
-                return Err(Error::Other(format!("Path not found: {}", path)));
+                return Err(Error::Other(format!("Path not found: {path}")));
             }
-            root_fid = root_fid + 1;
+            root_fid += 1;
         }
     }
 
@@ -366,11 +366,15 @@ async fn read_directory_contents(
                                 "{:>8} {} {}",
                                 stat.length,
                                 stat.name,
-                                if stat.mode & 0x80000000 != 0 { "/" } else { "" }
+                                if stat.mode & 0x8000_0000 != 0 {
+                                    "/"
+                                } else {
+                                    ""
+                                }
                             );
                         }
                         Err(e) => {
-                            eprintln!("Warning: Failed to parse stat: {}", e);
+                            eprintln!("Warning: Failed to parse stat: {e}");
                             break;
                         }
                     }
@@ -420,8 +424,7 @@ async fn mkdir_command(conn: &mut Connection, tag: u16, path: String, parents: b
             existing_depth = i;
             if i == components.len() {
                 return Err(Error::Other(format!(
-                    "mkdir: cannot create directory '{}': File exists",
-                    path
+                    "mkdir: cannot create directory '{path}': File exists"
                 )));
             }
             cleanup_fid(conn, tag, root_fid + 1).await?;
@@ -434,8 +437,7 @@ async fn mkdir_command(conn: &mut Connection, tag: u16, path: String, parents: b
     // check if we need -p flag
     if existing_depth < components.len() - 1 && !parents {
         return Err(Error::Other(format!(
-            "mkdir: cannot create directory '{}': No such file or directory",
-            path
+            "mkdir: cannot create directory '{path}': No such file or directory"
         )));
     }
 
@@ -444,7 +446,7 @@ async fn mkdir_command(conn: &mut Connection, tag: u16, path: String, parents: b
         create_directory(conn, tag, &components, i).await?;
     }
 
-    println!("Directory created: {}", path);
+    println!("Directory created: {path}");
     Ok(())
 }
 
@@ -466,8 +468,8 @@ async fn create_directory(
         let create_msg = Tcreate {
             fid: root_fid,
             name: components[index].clone(),
-            perm: 0o755 | 0x80000000, // directory permissions with DMDIR bit
-            mode: 0,                  // OREAD
+            perm: 0o755 | 0x8000_0000, // directory permissions with DMDIR bit
+            mode: 0,                   // OREAD
         };
         send_message(
             conn,
@@ -511,7 +513,7 @@ async fn create_directory(
         let create_msg = Tcreate {
             fid: parent_fid,
             name: components[index].clone(),
-            perm: 0o755 | 0x80000000,
+            perm: 0o755 | 0x8000_0000,
             mode: 0,
         };
         send_message(
@@ -587,15 +589,18 @@ async fn handle_existing_file_touch(
     match response.message {
         Message::Rstat(rstat) => match ParsedStat::from_bytes(&rstat.stat) {
             Ok(stat) => {
-                if stat.mode & 0x80000000 != 0 {
+                if stat.mode & 0x8000_0000 != 0 {
                     cleanup_fid(conn, tag, file_fid).await?;
-                    return Err(Error::Other(format!("touch: {}: Is a directory", path)));
+                    return Err(Error::Other(format!("touch: {path}: Is a directory")));
                 }
 
-                let current_time = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs() as u32;
+                let current_time = u32::try_from(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                )
+                .unwrap();
 
                 if let Ok(updated_stat) =
                     create_updated_stat_bytes(&stat, current_time, current_time)
@@ -616,25 +621,25 @@ async fn handle_existing_file_touch(
                     if let Ok(response) = receive_message(conn).await {
                         match response.message {
                             Message::Rwstat(_) => {
-                                println!("Updated access and modification times for: {}", path);
+                                println!("Updated access and modification times for: {path}");
                             }
                             Message::Rerror(err) => {
                                 eprintln!("Warning: Could not update file times: {}", err.ename);
-                                println!("File exists: {}", path);
+                                println!("File exists: {path}");
                             }
                             _ => {
                                 eprintln!("Warning: Unexpected response to Twstat");
-                                println!("File exists: {}", path);
+                                println!("File exists: {path}");
                             }
                         }
                     }
                 } else {
-                    println!("File exists: {}", path);
+                    println!("File exists: {path}");
                 }
             }
             Err(e) => {
-                eprintln!("Warning: Failed to parse stat: {}", e);
-                println!("File exists: {}", path);
+                eprintln!("Warning: Failed to parse stat: {e}");
+                println!("File exists: {path}");
             }
         },
         Message::Rerror(err) => {
@@ -687,7 +692,7 @@ async fn create_new_file(
         match response.message {
             Message::Rcreate(_) => {
                 cleanup_fid(conn, tag, root_fid).await?;
-                println!("File created: {}", path);
+                println!("File created: {path}");
                 Ok(())
             }
             Message::Rerror(err) => Err(Error::Other(format!(
@@ -711,8 +716,7 @@ async fn create_new_file(
         if !walk_success {
             cleanup_fid(conn, tag, parent_fid).await?;
             return Err(Error::Other(format!(
-                "Parent directory not found for: {}",
-                path
+                "Parent directory not found for: {path}"
             )));
         }
 
@@ -735,14 +739,14 @@ async fn create_new_file(
         match response.message {
             Message::Rcreate(_) => {
                 cleanup_fid(conn, tag, parent_fid).await?;
-                println!("File created: {}", path);
+                println!("File created: {path}");
                 Ok(())
             }
             Message::Rerror(err) => {
                 cleanup_fid(conn, tag, parent_fid).await?;
                 Err(Error::Other(format!(
-                    "Failed to create file '{}': {}",
-                    path, err.ename
+                    "Failed to create file '{path}': {}",
+                    err.ename
                 )))
             }
             _ => {
@@ -852,7 +856,7 @@ async fn get_file_size(conn: &mut Connection, tag: u16, fid: u32) -> Result<u64>
 
     let response = receive_message(conn).await?;
     match response.message {
-        Message::Rstat(rstat) => get_file_length_from_stat(&rstat.stat).map_err(Error::from),
+        Message::Rstat(rstat) => get_file_length_from_stat(&rstat.stat),
         Message::Rerror(err) => {
             eprintln!(
                 "Warning: Could not stat file: {}, starting at offset 0",
@@ -924,8 +928,7 @@ async fn create_file_for_writing(
         if !walk_success {
             cleanup_fid(conn, tag, parent_fid).await?;
             return Err(Error::Other(format!(
-                "Parent directory not found for: {}",
-                path
+                "Parent directory not found for: {path}",
             )));
         }
 
@@ -999,7 +1002,7 @@ async fn write_data_to_file(
                     return Err(Error::Other("Write failed: server wrote 0 bytes".into()));
                 }
                 bytes_written += rwrite.count as usize;
-                offset += rwrite.count as u64;
+                offset += u64::from(rwrite.count);
             }
             Message::Rerror(err) => {
                 return Err(Error::Other(format!(
@@ -1020,15 +1023,15 @@ async fn cat_command(conn: &mut Connection, tag: u16, path: String, msize: u32) 
     let mut root_fid = 2;
     let components = parse_path_components(&path);
 
-    if !components.is_empty() {
-        let walk_success = walk_to_path(conn, tag, root_fid, root_fid + 1, &path).await?;
-        if !walk_success {
-            return Err(Error::Other(format!("File not found: {}", path)));
-        }
-        root_fid = root_fid + 1;
-    } else {
-        return Err(Error::Other(format!("cat: {}: Is a directory", path)));
+    if components.is_empty() {
+        return Err(Error::Other(format!("cat: {path}: Is a directory")));
     }
+
+    let walk_success = walk_to_path(conn, tag, root_fid, root_fid + 1, &path).await?;
+    if !walk_success {
+        return Err(Error::Other(format!("File not found: {path}")));
+    }
+    root_fid += 1;
 
     // open file for reading
     let open_msg = Topen {
@@ -1048,7 +1051,7 @@ async fn cat_command(conn: &mut Connection, tag: u16, path: String, msize: u32) 
     match response.message {
         Message::Ropen(ropen) => {
             if ropen.qid.qtype & 0x80 != 0 {
-                return Err(Error::Other(format!("cat: {}: Is a directory", path)));
+                return Err(Error::Other(format!("cat: {path}: Is a directory")));
             }
         }
         Message::Rerror(err) => {
@@ -1107,9 +1110,9 @@ async fn read_and_output_file(conn: &mut Connection, tag: u16, fid: u32, msize: 
 }
 
 fn create_updated_stat_bytes(
-    current_stat: &ParsedStat,
-    atime: u32,
-    mtime: u32,
+    _current_stat: &ParsedStat,
+    _atime: u32,
+    _mtime: u32,
 ) -> Result<bytes::Bytes> {
     unimplemented!("stat writing");
 }

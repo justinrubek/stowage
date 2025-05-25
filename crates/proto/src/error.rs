@@ -12,6 +12,9 @@ pub enum Error {
     #[error("string too long: {0} bytes")]
     StringTooLong(usize),
 
+    #[error("byte array too long: {0} bytes")]
+    BytesTooLong(usize),
+
     #[error("Vector too long: {0} items")]
     VectorTooLong(usize),
 

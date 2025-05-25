@@ -18,6 +18,6 @@ impl From<String> for Error {
 
 impl From<&str> for Error {
     fn from(value: &str) -> Self {
-        Error::Other(value.to_string().into())
+        Error::Other(value.to_string())
     }
 }
