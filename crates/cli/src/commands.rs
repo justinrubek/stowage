@@ -55,6 +55,14 @@ pub(crate) enum FileCommands {
     Touch {
         path: String,
     },
+    Write {
+        path: String,
+        /// Data to write (if omitted, read from stdin)
+        data: Option<String>,
+        /// Append to file instead of truncating
+        #[arg(long, short)]
+        append: bool,
+    },
     Cat {
         path: String,
     },

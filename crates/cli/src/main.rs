@@ -10,7 +10,7 @@ use std::sync::Arc;
 use stowage_filesystems::disk::Handler;
 use stowage_proto::{
     consts::P9_NOFID, Message, MessageCodec, ParsedStat, Protocol, TaggedMessage, Tattach, Tauth,
-    Tclunk, Tcreate, Topen, Tread, Tstat, Tversion, Twalk, Twstat,
+    Tclunk, Tcreate, Topen, Tread, Tstat, Tversion, Twalk, Twrite, Twstat,
 };
 use stowage_service::Plan9;
 use tokio::net::{TcpListener, TcpStream};
@@ -960,6 +960,396 @@ async fn main() -> Result<()> {
                     Ok(())
                 }
 
+                commands::FileCommands::Write { path, data, append } => {
+                    info!("running: write {path} (append: {append})");
+
+                    // 1. get data from command line or stdin
+                    let write_data = if let Some(data) = data {
+                        data.into_bytes()
+                    } else {
+                        use std::io::Read;
+                        let mut buffer = Vec::new();
+                        std::io::stdin().read_to_end(&mut buffer)?;
+                        buffer
+                    };
+
+                    // 2. attach to filesystem
+                    let root_fid = 2;
+                    let attach_msg = Tattach {
+                        fid: root_fid,
+                        afid: P9_NOFID,
+                        uname: String::from("nobody"),
+                        aname: String::from(""),
+                    };
+                    let tagged = TaggedMessage {
+                        message: Message::Tattach(attach_msg),
+                        tag,
+                    };
+                    conn.send(tagged).await?;
+
+                    if let Some(Ok(msg)) = conn.next().await {
+                        match msg.message {
+                            Message::Rattach(_) => {}
+                            Message::Rerror(err) => {
+                                return Err(Error::Other(format!(
+                                    "Failed to attach to filesystem: {}",
+                                    err.ename
+                                )));
+                            }
+                            _ => return Err(Error::Other("Unexpected response to Tattach".into())),
+                        }
+                    } else {
+                        return Err(Error::Other("No response to attach".into()));
+                    }
+
+                    // 3. parse path components
+                    let components: Vec<String> = path
+                        .split('/')
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                        .collect();
+
+                    if components.is_empty() {
+                        return Err(Error::Other("Cannot write to root directory".into()));
+                    }
+
+                    // 4. try to walk to the file
+                    let file_fid = root_fid + 1;
+                    let walk_msg = Twalk {
+                        fid: root_fid,
+                        newfid: file_fid,
+                        wnames: components.clone(),
+                    };
+                    let tagged = TaggedMessage {
+                        message: Message::Twalk(walk_msg),
+                        tag,
+                    };
+                    conn.send(tagged).await?;
+
+                    let file_exists = if let Some(Ok(msg)) = conn.next().await {
+                        match msg.message {
+                            Message::Rwalk(rwalk) => {
+                                if rwalk.wqids.len() == components.len() {
+                                    // check if it's a directory
+                                    if let Some(last_qid) = rwalk.wqids.last() {
+                                        if last_qid.qtype & 0x80 != 0 {
+                                            // clean up fid
+                                            let clunk_msg = Tclunk { fid: file_fid };
+                                            let tagged = TaggedMessage {
+                                                message: Message::Tclunk(clunk_msg),
+                                                tag,
+                                            };
+                                            conn.send(tagged).await?;
+                                            if let Some(Ok(_)) = conn.next().await {}
+
+                                            return Err(Error::Other(format!(
+                                                "write: {}: Is a directory",
+                                                path
+                                            )));
+                                        }
+                                    }
+                                    true
+                                } else {
+                                    // clean up partial fid
+                                    let clunk_msg = Tclunk { fid: file_fid };
+                                    let tagged = TaggedMessage {
+                                        message: Message::Tclunk(clunk_msg),
+                                        tag,
+                                    };
+                                    conn.send(tagged).await?;
+                                    if let Some(Ok(_)) = conn.next().await {}
+                                    false
+                                }
+                            }
+                            Message::Rerror(_) => false,
+                            _ => return Err(Error::Other("Unexpected response to Twalk".into())),
+                        }
+                    } else {
+                        return Err(Error::Other("No response to walk".into()));
+                    };
+
+                    let (write_fid, start_offset) = if file_exists {
+                        // 5a. file exists - open for writing
+                        let open_msg = Topen {
+                            fid: file_fid,
+                            mode: 1, // OWRITE (always just write mode - we'll handle append manually)
+                        };
+                        let tagged = TaggedMessage {
+                            message: Message::Topen(open_msg),
+                            tag,
+                        };
+                        conn.send(tagged).await?;
+
+                        if let Some(Ok(msg)) = conn.next().await {
+                            match msg.message {
+                                Message::Ropen(_) => {
+                                    // if append mode, get file size to determine where to start writing
+                                    let offset = if append {
+                                        let stat_msg = Message::Tstat(Tstat { fid: file_fid });
+                                        let tagged = TaggedMessage {
+                                            message: stat_msg,
+                                            tag,
+                                        };
+                                        conn.send(tagged).await?;
+
+                                        if let Some(Ok(msg)) = conn.next().await {
+                                            match msg.message {
+                                                Message::Rstat(rstat) => {
+                                                    match get_file_length_from_stat(&rstat.stat) {
+                                                        Ok(length) => {
+                                                            println!(
+                                                                "DEBUG: File size for append: {}",
+                                                                length
+                                                            );
+                                                            length
+                                                        }
+                                                        Err(e) => {
+                                                            eprintln!("Warning: Could not parse file length: {}, starting at offset 0", e);
+                                                            0
+                                                        }
+                                                    }
+                                                }
+                                                Message::Rerror(err) => {
+                                                    eprintln!("Warning: Could not stat file for append: {}, starting at offset 0", err.ename);
+                                                    0
+                                                }
+                                                _ => {
+                                                    eprintln!("Warning: Unexpected response to Tstat, starting at offset 0");
+                                                    0
+                                                }
+                                            }
+                                        } else {
+                                            eprintln!("Warning: No response to stat, starting at offset 0");
+                                            0
+                                        }
+                                    } else {
+                                        0
+                                    };
+
+                                    (file_fid, offset)
+                                }
+                                Message::Rerror(err) => {
+                                    return Err(Error::Other(format!(
+                                        "Failed to open file for writing: {}",
+                                        err.ename
+                                    )));
+                                }
+                                _ => {
+                                    return Err(Error::Other("Unexpected response to Topen".into()))
+                                }
+                            }
+                        } else {
+                            return Err(Error::Other("No response to open".into()));
+                        }
+                    } else {
+                        // 5b. file doesn't exist - create it
+                        let (parent_components, filename) = if components.len() > 1 {
+                            (
+                                components[0..components.len() - 1].to_vec(),
+                                components.last().unwrap().clone(),
+                            )
+                        } else {
+                            (vec![], components[0].clone())
+                        };
+
+                        let created_fid = if parent_components.is_empty() {
+                            // creating in root directory
+                            let create_msg = Tcreate {
+                                fid: root_fid,
+                                name: filename,
+                                perm: 0o644, // regular file permissions
+                                mode: 1,     // OWRITE
+                            };
+                            let tagged = TaggedMessage {
+                                message: Message::Tcreate(create_msg),
+                                tag,
+                            };
+                            conn.send(tagged).await?;
+
+                            if let Some(Ok(msg)) = conn.next().await {
+                                match msg.message {
+                                    Message::Rcreate(_) => root_fid,
+                                    Message::Rerror(err) => {
+                                        return Err(Error::Other(format!(
+                                            "Failed to create file '{}': {}",
+                                            path, err.ename
+                                        )));
+                                    }
+                                    _ => {
+                                        return Err(Error::Other(
+                                            "Unexpected response to Tcreate".into(),
+                                        ))
+                                    }
+                                }
+                            } else {
+                                return Err(Error::Other("No response to create".into()));
+                            }
+                        } else {
+                            // walk to parent directory first
+                            let parent_fid = root_fid + 2;
+                            let walk_msg = Twalk {
+                                fid: root_fid,
+                                newfid: parent_fid,
+                                wnames: parent_components.clone(),
+                            };
+                            let tagged = TaggedMessage {
+                                message: Message::Twalk(walk_msg),
+                                tag,
+                            };
+                            conn.send(tagged).await?;
+
+                            if let Some(Ok(msg)) = conn.next().await {
+                                match msg.message {
+                                    Message::Rwalk(rwalk) => {
+                                        if rwalk.wqids.len() != parent_components.len() {
+                                            // Clean up partial fid
+                                            let clunk_msg = Tclunk { fid: parent_fid };
+                                            let tagged = TaggedMessage {
+                                                message: Message::Tclunk(clunk_msg),
+                                                tag,
+                                            };
+                                            conn.send(tagged).await?;
+                                            if let Some(Ok(_)) = conn.next().await {}
+
+                                            return Err(Error::Other(format!(
+                                                "Parent directory not found for: {}",
+                                                path
+                                            )));
+                                        }
+
+                                        // Create file in parent directory
+                                        let create_msg = Tcreate {
+                                            fid: parent_fid,
+                                            name: filename,
+                                            perm: 0o644,
+                                            mode: 1, // OWRITE
+                                        };
+                                        let tagged = TaggedMessage {
+                                            message: Message::Tcreate(create_msg),
+                                            tag,
+                                        };
+                                        conn.send(tagged).await?;
+
+                                        if let Some(Ok(msg)) = conn.next().await {
+                                            match msg.message {
+                                                Message::Rcreate(_) => parent_fid,
+                                                Message::Rerror(err) => {
+                                                    return Err(Error::Other(format!(
+                                                        "Failed to create file '{}': {}",
+                                                        path, err.ename
+                                                    )));
+                                                }
+                                                _ => {
+                                                    return Err(Error::Other(
+                                                        "Unexpected response to Tcreate".into(),
+                                                    ))
+                                                }
+                                            }
+                                        } else {
+                                            return Err(Error::Other(
+                                                "No response to create".into(),
+                                            ));
+                                        }
+                                    }
+                                    Message::Rerror(err) => {
+                                        return Err(Error::Other(format!(
+                                            "Failed to walk to parent directory: {}",
+                                            err.ename
+                                        )));
+                                    }
+                                    _ => {
+                                        return Err(Error::Other(
+                                            "Unexpected response to Twalk".into(),
+                                        ))
+                                    }
+                                }
+                            } else {
+                                return Err(Error::Other("No response to walk".into()));
+                            }
+                        };
+
+                        (created_fid, 0u64) // new file starts at offset 0
+                    };
+
+                    // 6. write data in chunks
+                    let protocol_overhead = 100;
+                    let max_count = if msize > protocol_overhead {
+                        (msize - protocol_overhead) as usize
+                    } else {
+                        4096
+                    };
+
+                    let mut offset = start_offset;
+                    let mut bytes_written = 0;
+
+                    while bytes_written < write_data.len() {
+                        let chunk_size = std::cmp::min(max_count, write_data.len() - bytes_written);
+                        let chunk = write_data[bytes_written..bytes_written + chunk_size].to_vec();
+
+                        let write_msg = Message::Twrite(Twrite {
+                            fid: write_fid,
+                            offset: offset,
+                            data: bytes::Bytes::from(chunk),
+                        });
+                        let tagged = TaggedMessage {
+                            message: write_msg,
+                            tag,
+                        };
+                        conn.send(tagged).await?;
+
+                        if let Some(Ok(msg)) = conn.next().await {
+                            match msg.message {
+                                Message::Rwrite(rwrite) => {
+                                    if rwrite.count == 0 {
+                                        return Err(Error::Other(
+                                            "Write failed: server wrote 0 bytes".into(),
+                                        ));
+                                    }
+                                    bytes_written += rwrite.count as usize;
+                                    offset += rwrite.count as u64;
+                                }
+                                Message::Rerror(err) => {
+                                    return Err(Error::Other(format!(
+                                        "Failed to write to file: {}",
+                                        err.ename
+                                    )));
+                                }
+                                _ => {
+                                    return Err(Error::Other(
+                                        "Unexpected response to Twrite".into(),
+                                    ))
+                                }
+                            }
+                        } else {
+                            return Err(Error::Other("No response to write".into()));
+                        }
+                    }
+
+                    // 7. clunk the fid
+                    let clunk_msg = Tclunk { fid: write_fid };
+                    let tagged = TaggedMessage {
+                        message: Message::Tclunk(clunk_msg),
+                        tag,
+                    };
+                    conn.send(tagged).await?;
+
+                    if let Some(Ok(msg)) = conn.next().await {
+                        match msg.message {
+                            Message::Rclunk(_) => {}
+                            Message::Rerror(err) => {
+                                eprintln!("Warning: Failed to clunk fid: {}", err.ename);
+                            }
+                            _ => {
+                                eprintln!("Warning: Unexpected response to Tclunk");
+                            }
+                        }
+                    }
+
+                    let mode_str = if append { "appended" } else { "wrote" };
+                    println!("{} {} bytes to {}", mode_str, bytes_written, path);
+                    Ok(())
+                }
+
                 commands::FileCommands::Cat { path } => {
                     info!("running: cat {path}");
 
@@ -1204,4 +1594,31 @@ fn create_updated_stat_bytes(
     mtime: u32,
 ) -> Result<bytes::Bytes> {
     unimplemented!("stat writing");
+}
+
+fn get_file_length_from_stat(
+    stat_bytes: &[u8],
+) -> std::result::Result<u64, Box<dyn std::error::Error>> {
+    // 9P stat structure layout (after size prefix):
+    // type[2] + dev[4] + qid[13] + mode[4] + atime[4] + mtime[4] + length[8] + ...
+    // Length field starts at byte offset 35 (2+4+13+4+4+4+4 = 35)
+    const LENGTH_OFFSET: usize = 35;
+
+    if stat_bytes.len() < LENGTH_OFFSET + 8 {
+        return Err("Stat bytes too short to contain length field".into());
+    }
+
+    let length_bytes = &stat_bytes[LENGTH_OFFSET..LENGTH_OFFSET + 8];
+    let length = u64::from_le_bytes([
+        length_bytes[0],
+        length_bytes[1],
+        length_bytes[2],
+        length_bytes[3],
+        length_bytes[4],
+        length_bytes[5],
+        length_bytes[6],
+        length_bytes[7],
+    ]);
+
+    Ok(length)
 }
