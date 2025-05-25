@@ -2,6 +2,7 @@
 bytes = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 futures = { workspace = true }
+hex = "0.4.3"
 # serde = { workspace = true }
 # serde_json = { workspace = true }
 stowage-filesystems = { path = "../filesystems" }

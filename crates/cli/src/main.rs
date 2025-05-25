@@ -2,15 +2,17 @@ use crate::{
     commands::{Commands, ServerCommands},
     error::Result,
 };
-use bytes::BytesMut;
+use bytes::{Buf, BytesMut};
 use clap::Parser;
 use error::Error;
 use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
 use stowage_filesystems::disk::Handler;
-use stowage_proto::{Codec, Message, Tattach, Tauth, Tclunk, Tlopen, Treaddir, Tversion};
+use stowage_proto::{
+    consts::P9_NOFID, Message, MessageCodec, ParsedStat, Protocol, TaggedMessage, Tattach, Tauth,
+    Tclunk, Topen, Tread, Tversion, Twalk,
+};
 use stowage_service::Plan9;
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
 use tracing::{error, info};
@@ -30,25 +32,28 @@ async fn main() -> Result<()> {
             let stream = TcpStream::connect(fs.addr).await?;
             let tag: u16 = 1;
 
-            let mut conn = Framed::new(stream, Codec);
+            let mut conn = Framed::new(stream, MessageCodec::new());
 
             let version_tag = 0xFFFF;
             let mut msize = 8192;
 
             // version negotiation
             let version_msg = Message::Tversion(Tversion {
-                tag: version_tag,
-                msize: msize,
-                version: String::from("9P2000.L"),
+                msize,
+                version: String::from("9P2000"),
             });
-            conn.send(version_msg).await?;
+            let tagged = TaggedMessage {
+                message: version_msg,
+                tag: version_tag,
+            };
+            conn.send(tagged).await?;
 
             if let Some(Ok(msg)) = conn.next().await {
-                match msg {
+                match msg.message {
                     Message::Rversion(rversion) => {
-                        if rversion.version != "9P2000.L" {
+                        if rversion.version != "9P2000" {
                             return Err(Error::Other(format!(
-                                "server doesn't support 9P2000.L, got {}",
+                                "server doesn't support 9P2000, got {}",
                                 rversion.version
                             )));
                         }
@@ -58,10 +63,10 @@ async fn main() -> Result<()> {
                             rversion.version, msize
                         );
                     }
-                    Message::Rlerror(err) => {
+                    Message::Rerror(err) => {
                         return Err(Error::Other(format!(
                             "version negotiation failed: {}",
-                            err.ecode
+                            err.ename,
                         )));
                     }
                     _ => return Err(Error::Other("unexpected response to Tversion".into())),
@@ -72,22 +77,25 @@ async fn main() -> Result<()> {
 
             let afid = 1;
             let auth_msg = Tauth {
-                tag,
                 afid,
                 uname: String::from("nobody"),
                 aname: String::from(""),
             };
-            conn.send(Message::Tauth(auth_msg)).await?;
+            let tagged = TaggedMessage {
+                message: Message::Tauth(auth_msg),
+                tag,
+            };
+            conn.send(tagged).await?;
 
             let used_afid: u32;
             if let Some(Ok(msg)) = conn.next().await {
-                match msg {
+                match msg.message {
                     Message::Rauth(_) => {
                         return Err(Error::Other(
                             "authentication required but not supported by this client".into(),
                         ));
                     }
-                    Message::Rlerror(_) => {
+                    Message::Rerror(_) => {
                         // expected when auth is not required
                         used_afid = 0xFFFFFFFF; // P9_NOFID
                     }
@@ -100,30 +108,32 @@ async fn main() -> Result<()> {
             match cmd {
                 commands::FileCommands::Ls { path } => {
                     let path = path.or(Some("/".into())).unwrap();
-                    println!("{path}");
+                    info!("running: ls {path}");
 
                     // 1. Attach to filesystem
-                    let root_fid = 2;
+                    let mut root_fid = 2;
                     let attach_msg = Tattach {
-                        tag,
                         fid: root_fid,
-                        afid: used_afid,
+                        afid: P9_NOFID, // No authentication
                         uname: String::from("nobody"),
                         aname: String::from(""),
                     };
-
-                    conn.send(Message::Tattach(attach_msg)).await?;
+                    let tagged = TaggedMessage {
+                        message: Message::Tattach(attach_msg),
+                        tag,
+                    };
+                    conn.send(tagged).await?;
 
                     // Handle attach response
                     if let Some(Ok(msg)) = conn.next().await {
-                        match msg {
+                        match msg.message {
                             Message::Rattach(_) => {
                                 // Successfully attached
                             }
-                            Message::Rlerror(err) => {
+                            Message::Rerror(err) => {
                                 return Err(Error::Other(format!(
-                                    "Failed to attach to filesystem: error {}",
-                                    err.ecode
+                                    "Failed to attach to filesystem: {}",
+                                    err.ename
                                 )));
                             }
                             _ => return Err(Error::Other("Unexpected response to Tattach".into())),
@@ -132,100 +142,200 @@ async fn main() -> Result<()> {
                         return Err(Error::Other("No response to attach".into()));
                     }
 
+                    // If we're not at root directory, we need to walk to the target path
+                    if path != "/" {
+                        let components: Vec<String> = path
+                            .split('/')
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string())
+                            .collect();
+
+                        if !components.is_empty() {
+                            let walk_msg = Twalk {
+                                fid: root_fid,
+                                newfid: root_fid + 1, // Use a new fid for the walked path
+                                wnames: components.clone(),
+                            };
+                            let tagged = TaggedMessage {
+                                message: Message::Twalk(walk_msg),
+                                tag,
+                            };
+                            conn.send(tagged).await?;
+
+                            if let Some(Ok(msg)) = conn.next().await {
+                                match msg.message {
+                                    Message::Rwalk(rwalk) => {
+                                        if rwalk.wqids.len() != components.len() {
+                                            return Err(Error::Other(format!(
+                                                "Path not found: {}",
+                                                path
+                                            )));
+                                        }
+                                        // Update the root_fid to our walked fid
+                                        root_fid = root_fid + 1;
+                                    }
+                                    Message::Rerror(err) => {
+                                        return Err(Error::Other(format!(
+                                            "Failed to walk to path: {}",
+                                            err.ename
+                                        )));
+                                    }
+                                    _ => {
+                                        return Err(Error::Other(
+                                            "Unexpected response to Twalk".into(),
+                                        ))
+                                    }
+                                }
+                            } else {
+                                return Err(Error::Other("No response to walk".into()));
+                            }
+                        }
+                    }
+
                     // 2. Open directory
-                    let lopen_msg = Tlopen {
-                        tag,
+                    let open_msg = Topen {
                         fid: root_fid,
-                        flags: 0, // P9_RDONLY
+                        mode: 0, // OREAD
                     };
+                    let tagged = TaggedMessage {
+                        message: Message::Topen(open_msg),
+                        tag,
+                    };
+                    conn.send(tagged).await?;
 
-                    conn.send(Message::Tlopen(lopen_msg)).await?;
-
-                    // Handle lopen response
+                    // Handle open response
                     if let Some(Ok(msg)) = conn.next().await {
-                        match msg {
-                            Message::Rlopen(_) => {
+                        match msg.message {
+                            Message::Ropen(_) => {
                                 // Directory opened successfully
                             }
-                            Message::Rlerror(err) => {
+                            Message::Rerror(err) => {
                                 return Err(Error::Other(format!(
-                                    "Failed to open directory: error {}",
-                                    err.ecode
+                                    "Failed to open directory: {}",
+                                    err.ename
                                 )));
                             }
-                            _ => return Err(Error::Other("Unexpected response to Tlopen".into())),
+                            _ => return Err(Error::Other("Unexpected response to Topen".into())),
                         }
                     } else {
-                        return Err(Error::Other("No response to lopen".into()));
+                        return Err(Error::Other("No response to open".into()));
                     }
 
                     // 3. Read directory contents
+                    // In 9p2000, reading a directory returns a stream of Stat structures
                     let mut offset: u64 = 0;
-                    let mut entries = Vec::new();
-                    let max_count = 8192; // P9_MAX_BUF
+                    let protocol_overhead = 100;
+                    let max_count = if msize > protocol_overhead {
+                        msize - protocol_overhead
+                    } else {
+                        4096
+                    };
+
+                    let all_stats: Vec<ParsedStat> = Vec::new();
+
+                    let mut offset = 0u64;
 
                     loop {
-                        let readdir_msg = Treaddir {
+                        // Send Tread request with current offset
+                        let tread = TaggedMessage::new(
                             tag,
-                            fid: root_fid,
-                            offset,
-                            count: max_count,
-                        };
+                            Message::Tread(Tread {
+                                fid: root_fid,
+                                offset,
+                                count: max_count,
+                            }),
+                        );
 
-                        conn.send(Message::Treaddir(readdir_msg)).await?;
+                        conn.send(tread).await?;
 
-                        // Handle readdir response
                         if let Some(Ok(msg)) = conn.next().await {
-                            match msg {
-                                Message::Rreaddir(rreaddir) => {
-                                    if rreaddir.data.is_empty() {
-                                        break; // No more entries
-                                    }
+                            match msg.message {
+                                Message::Rread(rread) => {
+                                    match rread.data.len() {
+                                        0 => break, // no more data - END OF DIRECTORY
+                                        _ => {
+                                            let data_len = rread.data.len();
 
-                                    // Process entries and update offset for next read
-                                    for entry in &rreaddir.data {
-                                        entries.push(entry.clone());
-                                        offset = entry.offset;
-                                    }
+                                            // parse each stat entry from the raw bytes
+                                            let mut bytes = BytesMut::from(&rread.data[..]);
 
-                                    if rreaddir.data.len() < (max_count as usize) {
-                                        break; // Reached end of directory
+                                            while !bytes.is_empty() {
+                                                if bytes.len() < 2 {
+                                                    break;
+                                                }
+
+                                                let stat_size =
+                                                    u16::from_le_bytes([bytes[0], bytes[1]])
+                                                        as usize;
+                                                if bytes.len() < stat_size + 2 {
+                                                    break;
+                                                }
+
+                                                let stat_bytes = bytes.split_to(stat_size + 2);
+
+                                                match ParsedStat::from_bytes(&stat_bytes.freeze()) {
+                                                    Ok(stat) => {
+                                                        println!(
+                                                            "{:>8} {} {}",
+                                                            stat.length,
+                                                            stat.name,
+                                                            if stat.mode & 0x80000000 != 0 {
+                                                                "/"
+                                                            } else {
+                                                                ""
+                                                            }
+                                                        );
+                                                    }
+                                                    Err(e) => {
+                                                        eprintln!(
+                                                            "Warning: Failed to parse stat: {}",
+                                                            e
+                                                        );
+                                                        break;
+                                                    }
+                                                }
+                                            }
+
+                                            // critical: Advance the offset for the next read
+                                            offset += data_len as u64;
+                                        }
                                     }
                                 }
-                                Message::Rlerror(err) => {
+                                Message::Rerror(err) => {
                                     return Err(Error::Other(format!(
-                                        "Failed to read directory: error {}",
-                                        err.ecode
+                                        "Failed to read directory: {}",
+                                        err.ename
                                     )));
                                 }
                                 _ => {
-                                    return Err(Error::Other(
-                                        "Unexpected response to Treaddir".into(),
-                                    ))
+                                    return Err(Error::Other("Unexpected response to Tread".into()))
                                 }
                             }
                         } else {
-                            return Err(Error::Other("No response to readdir".into()));
+                            return Err(Error::Other("Connection closed".into()));
                         }
                     }
 
-                    // 4. Clunk the fid
-                    let clunk_msg = Tclunk { tag, fid: root_fid };
+                    // 4. clunk the fid
+                    let clunk_msg = Tclunk { fid: root_fid };
+                    let tagged = TaggedMessage {
+                        message: Message::Tclunk(clunk_msg),
+                        tag,
+                    };
+                    conn.send(tagged).await?;
 
-                    conn.send(Message::Tclunk(clunk_msg)).await?;
-
-                    // Handle clunk response (optional, but good practice)
+                    // handle clunk response (optional, but good practice)
                     if let Some(Ok(msg)) = conn.next().await {
-                        match msg {
+                        match msg.message {
                             Message::Rclunk(_) => {
-                                // Successfully closed directory
+                                // successfully closed directory
                             }
-                            Message::Rlerror(err) => {
-                                // Non-fatal error
-                                eprintln!("Warning: Failed to clunk fid: error {}", err.ecode);
+                            Message::Rerror(err) => {
+                                // non-fatal error
+                                eprintln!("Warning: Failed to clunk fid: {}", err.ename);
                             }
                             _ => {
-                                // Non-fatal error
+                                // non-fatal error
                                 eprintln!("Warning: Unexpected response to Tclunk");
                             }
                         }
@@ -233,9 +343,10 @@ async fn main() -> Result<()> {
 
                     // Display results
                     println!("Directory listing for {path}:");
-                    for entry in entries {
-                        let type_char = if entry.dtype & 0x80 != 0 { 'd' } else { '-' };
-                        println!("{}{}", type_char, entry.name);
+                    for stat in all_stats {
+                        // FIX 6: Use stat.qid.qtype instead of stat.qtype
+                        let type_char = if stat.qid.qtype & 0x80 != 0 { 'd' } else { '-' };
+                        println!("{}{} {} bytes", type_char, stat.name, stat.length);
                     }
 
                     Ok(())
