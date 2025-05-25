@@ -10,7 +10,7 @@ use std::sync::Arc;
 use stowage_filesystems::disk::Handler;
 use stowage_proto::{
     consts::P9_NOFID, Message, MessageCodec, ParsedStat, Protocol, TaggedMessage, Tattach, Tauth,
-    Tclunk, Topen, Tread, Tversion, Twalk,
+    Tclunk, Tcreate, Topen, Tread, Tversion, Twalk,
 };
 use stowage_service::Plan9;
 use tokio::net::{TcpListener, TcpStream};
@@ -352,10 +352,265 @@ async fn main() -> Result<()> {
                     Ok(())
                 }
 
+                commands::FileCommands::Mkdir { path, parents } => {
+                    info!("running: mkdir {path}");
+
+                    // 1. attach to filesystem
+                    let root_fid = 2;
+                    let attach_msg = Tattach {
+                        fid: root_fid,
+                        afid: P9_NOFID,
+                        uname: String::from("nobody"),
+                        aname: String::from(""),
+                    };
+                    let tagged = TaggedMessage {
+                        message: Message::Tattach(attach_msg),
+                        tag,
+                    };
+                    conn.send(tagged).await?;
+
+                    // handle attach response
+                    if let Some(Ok(msg)) = conn.next().await {
+                        match msg.message {
+                            Message::Rattach(_) => {}
+                            Message::Rerror(err) => {
+                                return Err(Error::Other(format!(
+                                    "Failed to attach to filesystem: {}",
+                                    err.ename
+                                )));
+                            }
+                            _ => return Err(Error::Other("Unexpected response to Tattach".into())),
+                        }
+                    } else {
+                        return Err(Error::Other("No response to attach".into()));
+                    }
+
+                    // 2. parse the full path into components
+                    let path = path.trim_end_matches('/');
+                    let components: Vec<String> = path
+                        .split('/')
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                        .collect();
+
+                    if components.is_empty() {
+                        return Err(Error::Other("Cannot create root directory".into()));
+                    }
+
+                    // 3. find how far we can walk, then create what's missing
+                    let mut existing_depth = 0;
+
+                    // try to walk the full path to see how much exists
+                    for i in 1..=components.len() {
+                        let partial_components = components[0..i].to_vec();
+
+                        let walk_msg = Twalk {
+                            fid: root_fid,
+                            newfid: root_fid + 1,
+                            wnames: partial_components.clone(),
+                        };
+                        let tagged = TaggedMessage {
+                            message: Message::Twalk(walk_msg),
+                            tag,
+                        };
+                        conn.send(tagged).await?;
+
+                        if let Some(Ok(msg)) = conn.next().await {
+                            match msg.message {
+                                Message::Rwalk(rwalk) => {
+                                    if rwalk.wqids.len() == partial_components.len() {
+                                        // this path exists
+                                        existing_depth = i;
+
+                                        // if this is the full path, it already exists
+                                        if i == components.len() {
+                                            return Err(Error::Other(format!(
+                                                "mkdir: cannot create directory '{}': File exists",
+                                                path
+                                            )));
+                                        }
+
+                                        // clunk the temporary fid
+                                        let clunk_msg = Tclunk { fid: root_fid + 1 };
+                                        let tagged = TaggedMessage {
+                                            message: Message::Tclunk(clunk_msg),
+                                            tag,
+                                        };
+                                        conn.send(tagged).await?;
+                                        if let Some(Ok(_)) = conn.next().await {}
+                                    } else {
+                                        // this path doesn't fully exist
+                                        // clunk the temporary fid
+                                        let clunk_msg = Tclunk { fid: root_fid + 1 };
+                                        let tagged = TaggedMessage {
+                                            message: Message::Tclunk(clunk_msg),
+                                            tag,
+                                        };
+                                        conn.send(tagged).await?;
+                                        if let Some(Ok(_)) = conn.next().await {}
+                                        break;
+                                    }
+                                }
+                                Message::Rerror(_) => {
+                                    // path doesn't exist at all
+                                    break;
+                                }
+                                _ => {
+                                    return Err(Error::Other("Unexpected response to Twalk".into()))
+                                }
+                            }
+                        } else {
+                            return Err(Error::Other("No response to walk".into()));
+                        }
+                    }
+
+                    // check if we need -p flag
+                    if existing_depth < components.len() - 1 && !parents {
+                        return Err(Error::Other(format!(
+                            "mkdir: cannot create directory '{}': No such file or directory",
+                            path
+                        )));
+                    }
+
+                    // 4. create missing directories one by one
+                    for i in existing_depth..components.len() {
+                        // walk to the parent directory
+                        let parent_components = if i == 0 {
+                            vec![]
+                        } else {
+                            components[0..i].to_vec()
+                        };
+
+                        let parent_fid = root_fid + 2;
+
+                        if parent_components.is_empty() {
+                            // creating in root - use root_fid directly
+                            let create_msg = Tcreate {
+                                fid: root_fid,
+                                name: components[i].clone(),
+                                perm: 0o755 | 0x80000000, // directory permissions with DMDIR bit
+                                mode: 0,                  // OREAD
+                            };
+                            let tagged = TaggedMessage {
+                                message: Message::Tcreate(create_msg),
+                                tag,
+                            };
+                            conn.send(tagged).await?;
+
+                            if let Some(Ok(msg)) = conn.next().await {
+                                match msg.message {
+                                    Message::Rcreate(_) => {
+                                        // success - but we need to clunk this opened fid if we're not done
+                                        if i < components.len() - 1 {
+                                            let clunk_msg = Tclunk { fid: root_fid };
+                                            let tagged = TaggedMessage {
+                                                message: Message::Tclunk(clunk_msg),
+                                                tag,
+                                            };
+                                            conn.send(tagged).await?;
+                                            if let Some(Ok(_)) = conn.next().await {}
+                                        }
+                                    }
+                                    Message::Rerror(err) => {
+                                        return Err(Error::Other(format!(
+                                            "Failed to create directory '{}': {}",
+                                            components[i], err.ename
+                                        )));
+                                    }
+                                    _ => {
+                                        return Err(Error::Other(
+                                            "Unexpected response to Tcreate".into(),
+                                        ))
+                                    }
+                                }
+                            } else {
+                                return Err(Error::Other("No response to create".into()));
+                            }
+                        } else {
+                            // walk to parent directory
+                            let walk_msg = Twalk {
+                                fid: root_fid,
+                                newfid: parent_fid,
+                                wnames: parent_components,
+                            };
+                            let tagged = TaggedMessage {
+                                message: Message::Twalk(walk_msg),
+                                tag,
+                            };
+                            conn.send(tagged).await?;
+
+                            if let Some(Ok(msg)) = conn.next().await {
+                                match msg.message {
+                                    Message::Rwalk(_) => {
+                                        // now create the directory in the parent
+                                        let create_msg = Tcreate {
+                                            fid: parent_fid,
+                                            name: components[i].clone(),
+                                            perm: 0o755 | 0x80000000, // directory permissions with DMDIR bit
+                                            mode: 0,                  // OREAD
+                                        };
+                                        let tagged = TaggedMessage {
+                                            message: Message::Tcreate(create_msg),
+                                            tag,
+                                        };
+                                        conn.send(tagged).await?;
+
+                                        if let Some(Ok(msg)) = conn.next().await {
+                                            match msg.message {
+                                                Message::Rcreate(_) => {
+                                                    // success - clunk the opened fid
+                                                    let clunk_msg = Tclunk { fid: parent_fid };
+                                                    let tagged = TaggedMessage {
+                                                        message: Message::Tclunk(clunk_msg),
+                                                        tag,
+                                                    };
+                                                    conn.send(tagged).await?;
+                                                    if let Some(Ok(_)) = conn.next().await {}
+                                                }
+                                                Message::Rerror(err) => {
+                                                    return Err(Error::Other(format!(
+                                                        "Failed to create directory '{}': {}",
+                                                        components[i], err.ename
+                                                    )));
+                                                }
+                                                _ => {
+                                                    return Err(Error::Other(
+                                                        "Unexpected response to Tcreate".into(),
+                                                    ))
+                                                }
+                                            }
+                                        } else {
+                                            return Err(Error::Other(
+                                                "No response to create".into(),
+                                            ));
+                                        }
+                                    }
+                                    Message::Rerror(err) => {
+                                        return Err(Error::Other(format!(
+                                            "Failed to walk to parent directory: {}",
+                                            err.ename
+                                        )));
+                                    }
+                                    _ => {
+                                        return Err(Error::Other(
+                                            "Unexpected response to Twalk".into(),
+                                        ))
+                                    }
+                                }
+                            } else {
+                                return Err(Error::Other("No response to walk".into()));
+                            }
+                        }
+                    }
+
+                    println!("Directory created: {}", path);
+                    Ok(())
+                }
+
                 commands::FileCommands::Cat { path } => {
                     info!("running: cat {path}");
 
-                    // 1. Attach to filesystem
+                    // 1. attach to filesystem
                     let mut root_fid = 2;
                     let attach_msg = Tattach {
                         fid: root_fid,
@@ -369,11 +624,11 @@ async fn main() -> Result<()> {
                     };
                     conn.send(tagged).await?;
 
-                    // Handle attach response
+                    // handle attach response
                     if let Some(Ok(msg)) = conn.next().await {
                         match msg.message {
                             Message::Rattach(_) => {
-                                // Successfully attached
+                                // successfully attached
                             }
                             Message::Rerror(err) => {
                                 return Err(Error::Other(format!(
@@ -387,7 +642,7 @@ async fn main() -> Result<()> {
                         return Err(Error::Other("No response to attach".into()));
                     }
 
-                    // 2. Walk to the target file path
+                    // 2. walk to the target file path
                     let components: Vec<String> = path
                         .split('/')
                         .filter(|s| !s.is_empty())
@@ -415,7 +670,7 @@ async fn main() -> Result<()> {
                                             path
                                         )));
                                     }
-                                    // Check if the target is a directory by examining the last qid
+                                    // check if the target is a directory by examining the last qid
                                     if let Some(last_qid) = rwalk.wqids.last() {
                                         if last_qid.qtype & 0x80 != 0 {
                                             // QTDIR bit
@@ -425,7 +680,7 @@ async fn main() -> Result<()> {
                                             )));
                                         }
                                     }
-                                    // Update the root_fid to our walked fid
+                                    // update the root_fid to our walked fid
                                     root_fid = root_fid + 1;
                                 }
                                 Message::Rerror(err) => {
@@ -442,11 +697,11 @@ async fn main() -> Result<()> {
                             return Err(Error::Other("No response to walk".into()));
                         }
                     } else {
-                        // Root directory case
+                        // root directory case
                         return Err(Error::Other(format!("cat: {}: Is a directory", path)));
                     }
 
-                    // 3. Open file for reading
+                    // 3. open file for reading
                     let open_msg = Topen {
                         fid: root_fid,
                         mode: 0, // OREAD
@@ -457,11 +712,11 @@ async fn main() -> Result<()> {
                     };
                     conn.send(tagged).await?;
 
-                    // Handle open response and double-check if it's a directory
+                    // handle open response and double-check if it's a directory
                     if let Some(Ok(msg)) = conn.next().await {
                         match msg.message {
                             Message::Ropen(ropen) => {
-                                // Double-check: if qid indicates directory, return error
+                                // double-check: if qid indicates directory, return error
                                 if ropen.qid.qtype & 0x80 != 0 {
                                     // QTDIR bit
                                     return Err(Error::Other(format!(
@@ -483,7 +738,7 @@ async fn main() -> Result<()> {
                         return Err(Error::Other("No response to open".into()));
                     }
 
-                    // 4. Read file contents
+                    // 4. read file contents
                     let mut offset: u64 = 0;
                     let protocol_overhead = 100;
                     let max_count = if msize > protocol_overhead {
@@ -493,7 +748,7 @@ async fn main() -> Result<()> {
                     };
 
                     loop {
-                        // Send Tread request with current offset
+                        // send Tread request with current offset
                         let tread = TaggedMessage::new(
                             tag,
                             Message::Tread(Tread {
@@ -509,12 +764,12 @@ async fn main() -> Result<()> {
                             match msg.message {
                                 Message::Rread(rread) => {
                                     match rread.data.len() {
-                                        0 => break, // End of file
+                                        0 => break, // end of file
                                         _ => {
-                                            // Print the raw file content to stdout
+                                            // print the raw file content to stdout
                                             print!("{}", String::from_utf8_lossy(&rread.data));
 
-                                            // Advance offset for next read
+                                            // advance offset for next read
                                             offset += rread.data.len() as u64;
                                         }
                                     }
@@ -534,7 +789,7 @@ async fn main() -> Result<()> {
                         }
                     }
 
-                    // 5. Clunk the fid
+                    // 5. clunk the fid
                     let clunk_msg = Tclunk { fid: root_fid };
                     let tagged = TaggedMessage {
                         message: Message::Tclunk(clunk_msg),
@@ -542,18 +797,18 @@ async fn main() -> Result<()> {
                     };
                     conn.send(tagged).await?;
 
-                    // Handle clunk response (optional, but good practice)
+                    // handle clunk response (optional, but good practice)
                     if let Some(Ok(msg)) = conn.next().await {
                         match msg.message {
                             Message::Rclunk(_) => {
-                                // Successfully closed file
+                                // successfully closed file
                             }
                             Message::Rerror(err) => {
-                                // Non-fatal error
+                                // non-fatal error
                                 eprintln!("Warning: Failed to clunk fid: {}", err.ename);
                             }
                             _ => {
-                                // Non-fatal error
+                                // non-fatal error
                                 eprintln!("Warning: Unexpected response to Tclunk");
                             }
                         }

@@ -43,6 +43,16 @@ pub(crate) struct FileCommand {
 
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum FileCommands {
-    Ls { path: Option<String> },
-    Cat { path: String },
+    Ls {
+        path: Option<String>,
+    },
+    Mkdir {
+        path: String,
+        /// create parent directories
+        #[arg(long, short)]
+        parents: bool,
+    },
+    Cat {
+        path: String,
+    },
 }
