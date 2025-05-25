@@ -52,6 +52,9 @@ pub(crate) enum FileCommands {
         #[arg(long, short)]
         parents: bool,
     },
+    Touch {
+        path: String,
+    },
     Cat {
         path: String,
     },

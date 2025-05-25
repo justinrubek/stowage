@@ -10,7 +10,7 @@ use std::sync::Arc;
 use stowage_filesystems::disk::Handler;
 use stowage_proto::{
     consts::P9_NOFID, Message, MessageCodec, ParsedStat, Protocol, TaggedMessage, Tattach, Tauth,
-    Tclunk, Tcreate, Topen, Tread, Tversion, Twalk,
+    Tclunk, Tcreate, Topen, Tread, Tstat, Tversion, Twalk, Twstat,
 };
 use stowage_service::Plan9;
 use tokio::net::{TcpListener, TcpStream};
@@ -607,6 +607,359 @@ async fn main() -> Result<()> {
                     Ok(())
                 }
 
+                commands::FileCommands::Touch { path } => {
+                    info!("running: touch {path}");
+
+                    // 1. Attach to filesystem
+                    let root_fid = 2;
+                    let attach_msg = Tattach {
+                        fid: root_fid,
+                        afid: P9_NOFID,
+                        uname: String::from("nobody"),
+                        aname: String::from(""),
+                    };
+                    let tagged = TaggedMessage {
+                        message: Message::Tattach(attach_msg),
+                        tag,
+                    };
+                    conn.send(tagged).await?;
+
+                    // Handle attach response
+                    if let Some(Ok(msg)) = conn.next().await {
+                        match msg.message {
+                            Message::Rattach(_) => {}
+                            Message::Rerror(err) => {
+                                return Err(Error::Other(format!(
+                                    "Failed to attach to filesystem: {}",
+                                    err.ename
+                                )));
+                            }
+                            _ => return Err(Error::Other("Unexpected response to Tattach".into())),
+                        }
+                    } else {
+                        return Err(Error::Other("No response to attach".into()));
+                    }
+
+                    // 2. Parse the path into components
+                    let components: Vec<String> = path
+                        .split('/')
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                        .collect();
+
+                    if components.is_empty() {
+                        return Err(Error::Other("Cannot touch root directory".into()));
+                    }
+
+                    // 3. Try to walk to the full path to see if file exists
+                    let file_fid = root_fid + 1;
+                    let walk_msg = Twalk {
+                        fid: root_fid,
+                        newfid: file_fid,
+                        wnames: components.clone(),
+                    };
+                    let tagged = TaggedMessage {
+                        message: Message::Twalk(walk_msg),
+                        tag,
+                    };
+                    conn.send(tagged).await?;
+
+                    let file_exists = if let Some(Ok(msg)) = conn.next().await {
+                        match msg.message {
+                            Message::Rwalk(rwalk) => {
+                                if rwalk.wqids.len() == components.len() {
+                                    // File exists - check if it's a directory
+                                    if let Some(last_qid) = rwalk.wqids.last() {
+                                        if last_qid.qtype & 0x80 != 0 {
+                                            // QTDIR bit - it's a directory
+                                            // Clean up the fid before returning error
+                                            let clunk_msg = Tclunk { fid: file_fid };
+                                            let tagged = TaggedMessage {
+                                                message: Message::Tclunk(clunk_msg),
+                                                tag,
+                                            };
+                                            conn.send(tagged).await?;
+                                            if let Some(Ok(_)) = conn.next().await {}
+
+                                            return Err(Error::Other(format!(
+                                                "touch: {}: Is a directory",
+                                                path
+                                            )));
+                                        }
+                                    }
+                                    true
+                                } else {
+                                    // Partial walk - file doesn't exist, but we may have walked partway
+                                    // Clean up the partial fid
+                                    let clunk_msg = Tclunk { fid: file_fid };
+                                    let tagged = TaggedMessage {
+                                        message: Message::Tclunk(clunk_msg),
+                                        tag,
+                                    };
+                                    conn.send(tagged).await?;
+                                    if let Some(Ok(_)) = conn.next().await {}
+                                    false
+                                }
+                            }
+                            Message::Rerror(_) => false, // File doesn't exist
+                            _ => return Err(Error::Other("Unexpected response to Twalk".into())),
+                        }
+                    } else {
+                        return Err(Error::Other("No response to walk".into()));
+                    };
+
+                    if file_exists {
+                        // File exists - update access and modification times using Twstat
+
+                        // Get current stat to preserve other fields
+                        let stat_msg = Message::Tstat(Tstat { fid: file_fid });
+                        let tagged = TaggedMessage {
+                            message: stat_msg,
+                            tag,
+                        };
+                        conn.send(tagged).await?;
+
+                        let update_result = if let Some(Ok(msg)) = conn.next().await {
+                            match msg.message {
+                                Message::Rstat(rstat) => {
+                                    // Parse the current stat
+                                    match ParsedStat::from_bytes(&rstat.stat) {
+                                        Ok(current_stat) => {
+                                            // Get current time (Unix timestamp)
+                                            let current_time = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap()
+                                                .as_secs()
+                                                as u32;
+
+                                            // Create updated stat with new times
+                                            match create_updated_stat_bytes(
+                                                &current_stat,
+                                                current_time,
+                                                current_time,
+                                            ) {
+                                                Ok(updated_stat) => {
+                                                    // Send Twstat to update the file metadata
+                                                    let wstat_msg = Message::Twstat(Twstat {
+                                                        fid: file_fid,
+                                                        stat: updated_stat,
+                                                    });
+                                                    let tagged = TaggedMessage {
+                                                        message: wstat_msg,
+                                                        tag,
+                                                    };
+                                                    conn.send(tagged).await?;
+
+                                                    if let Some(Ok(msg)) = conn.next().await {
+                                                        match msg.message {
+                                                            Message::Rwstat(_) => Ok(()),
+                                                            Message::Rerror(err) => Err(format!(
+                                                                "Server rejected stat update: {}",
+                                                                err.ename
+                                                            )),
+                                                            _ => {
+                                                                Err("Unexpected response to Twstat"
+                                                                    .into())
+                                                            }
+                                                        }
+                                                    } else {
+                                                        Err("No response to wstat".into())
+                                                    }
+                                                }
+                                                Err(e) => Err(format!(
+                                                    "Failed to create updated stat: {}",
+                                                    e
+                                                )),
+                                            }
+                                        }
+                                        Err(e) => {
+                                            Err(format!("Failed to parse current stat: {}", e))
+                                        }
+                                    }
+                                }
+                                Message::Rerror(err) => {
+                                    Err(format!("Failed to get file stat: {}", err.ename))
+                                }
+                                _ => Err("Unexpected response to Tstat".into()),
+                            }
+                        } else {
+                            Err("No response to stat".into())
+                        };
+
+                        // Clean up the fid
+                        let clunk_msg = Tclunk { fid: file_fid };
+                        let tagged = TaggedMessage {
+                            message: Message::Tclunk(clunk_msg),
+                            tag,
+                        };
+                        conn.send(tagged).await?;
+                        if let Some(Ok(_)) = conn.next().await {}
+
+                        // Handle the update result
+                        match update_result {
+                            Ok(()) => {
+                                println!("Updated access and modification times for: {}", path);
+                            }
+                            Err(err_msg) => {
+                                // Some servers don't support Twstat or time updates - fall back gracefully
+                                eprintln!("Warning: Could not update file times: {}", err_msg);
+                                println!("File exists: {}", path);
+                            }
+                        }
+                    } else {
+                        // File doesn't exist - create it
+
+                        // Parse parent directory and filename
+                        let (parent_components, filename) = if components.len() > 1 {
+                            (
+                                components[0..components.len() - 1].to_vec(),
+                                components.last().unwrap().clone(),
+                            )
+                        } else {
+                            (vec![], components[0].clone())
+                        };
+
+                        if parent_components.is_empty() {
+                            // Creating in root directory - use root_fid directly
+                            let create_msg = Tcreate {
+                                fid: root_fid,
+                                name: filename,
+                                perm: 0o644, // Regular file permissions
+                                mode: 2,     // OWRITE to create and immediately close
+                            };
+                            let tagged = TaggedMessage {
+                                message: Message::Tcreate(create_msg),
+                                tag,
+                            };
+                            conn.send(tagged).await?;
+
+                            if let Some(Ok(msg)) = conn.next().await {
+                                match msg.message {
+                                    Message::Rcreate(_) => {
+                                        // Success - immediately clunk the opened file
+                                        let clunk_msg = Tclunk { fid: root_fid };
+                                        let tagged = TaggedMessage {
+                                            message: Message::Tclunk(clunk_msg),
+                                            tag,
+                                        };
+                                        conn.send(tagged).await?;
+                                        if let Some(Ok(_)) = conn.next().await {}
+
+                                        println!("File created: {}", path);
+                                    }
+                                    Message::Rerror(err) => {
+                                        return Err(Error::Other(format!(
+                                            "Failed to create file '{}': {}",
+                                            path, err.ename
+                                        )));
+                                    }
+                                    _ => {
+                                        return Err(Error::Other(
+                                            "Unexpected response to Tcreate".into(),
+                                        ))
+                                    }
+                                }
+                            } else {
+                                return Err(Error::Other("No response to create".into()));
+                            }
+                        } else {
+                            // Walk to parent directory first
+                            let parent_fid = root_fid + 2;
+                            let walk_msg = Twalk {
+                                fid: root_fid,
+                                newfid: parent_fid,
+                                wnames: parent_components.clone(),
+                            };
+                            let tagged = TaggedMessage {
+                                message: Message::Twalk(walk_msg),
+                                tag,
+                            };
+                            conn.send(tagged).await?;
+
+                            if let Some(Ok(msg)) = conn.next().await {
+                                match msg.message {
+                                    Message::Rwalk(rwalk) => {
+                                        if rwalk.wqids.len() != parent_components.len() {
+                                            // Clean up the partial fid
+                                            let clunk_msg = Tclunk { fid: parent_fid };
+                                            let tagged = TaggedMessage {
+                                                message: Message::Tclunk(clunk_msg),
+                                                tag,
+                                            };
+                                            conn.send(tagged).await?;
+                                            if let Some(Ok(_)) = conn.next().await {}
+
+                                            return Err(Error::Other(format!(
+                                                "Parent directory not found for: {}",
+                                                path
+                                            )));
+                                        }
+
+                                        // Now create the file in the parent directory
+                                        let create_msg = Tcreate {
+                                            fid: parent_fid,
+                                            name: filename,
+                                            perm: 0o644, // Regular file permissions
+                                            mode: 2,     // OWRITE to create and immediately close
+                                        };
+                                        let tagged = TaggedMessage {
+                                            message: Message::Tcreate(create_msg),
+                                            tag,
+                                        };
+                                        conn.send(tagged).await?;
+
+                                        let create_result = if let Some(Ok(msg)) = conn.next().await
+                                        {
+                                            match msg.message {
+                                                Message::Rcreate(_) => Ok(()),
+                                                Message::Rerror(err) => Err(format!(
+                                                    "Failed to create file '{}': {}",
+                                                    path, err.ename
+                                                )),
+                                                _ => Err("Unexpected response to Tcreate".into()),
+                                            }
+                                        } else {
+                                            Err("No response to create".into())
+                                        };
+
+                                        // Always clean up the parent fid
+                                        let clunk_msg = Tclunk { fid: parent_fid };
+                                        let tagged = TaggedMessage {
+                                            message: Message::Tclunk(clunk_msg),
+                                            tag,
+                                        };
+                                        conn.send(tagged).await?;
+                                        if let Some(Ok(_)) = conn.next().await {}
+
+                                        // Check create result
+                                        match create_result {
+                                            Ok(()) => println!("File created: {}", path),
+                                            Err(err_msg) => {
+                                                return Err(Error::Other(err_msg));
+                                            }
+                                        }
+                                    }
+                                    Message::Rerror(err) => {
+                                        return Err(Error::Other(format!(
+                                            "Failed to walk to parent directory: {}",
+                                            err.ename
+                                        )));
+                                    }
+                                    _ => {
+                                        return Err(Error::Other(
+                                            "Unexpected response to Twalk".into(),
+                                        ))
+                                    }
+                                }
+                            } else {
+                                return Err(Error::Other("No response to walk".into()));
+                            }
+                        }
+                    }
+
+                    Ok(())
+                }
+
                 commands::FileCommands::Cat { path } => {
                     info!("running: cat {path}");
 
@@ -843,4 +1196,12 @@ async fn main() -> Result<()> {
             }
         }
     }
+}
+
+fn create_updated_stat_bytes(
+    current_stat: &ParsedStat,
+    atime: u32,
+    mtime: u32,
+) -> Result<bytes::Bytes> {
+    unimplemented!("stat writing");
 }
