@@ -1,0 +1,46 @@
+#!/usr/bin/env sh
+set -euxo pipefail
+
+sudo whoami
+
+
+CAPTURE_DIR="$(pwd)/capture"
+mkdir -p "$CAPTURE_DIR"
+chmod 777 "$CAPTURE_DIR"
+
+# start the server
+nix run nixpkgs#socat -- TCP4-LISTEN:4500,range=127.0.0.1/32 EXEC:"nix run nixpkgs#u9fs -- -D -l ./u9fs.log -a none -u `whoami` data" &
+SOCAT_PID=$!
+
+# give socat time to start properly
+sleep 1
+
+# start tcpflow with BOTH -f (don't disturb stdin/stdout) and -g (close outputs when done)
+sudo nix run nixpkgs#tcpflow -- -o ${CAPTURE_DIR} -i lo port 4500 &
+TCPFLOW_PID=$!
+
+# give tcpflow time to initialize
+sleep 2
+
+# run test operations
+mkdir -p mnt
+9fs mount 'tcp!localhost!4500' mnt
+
+ls mnt
+
+# send SIGINT for orderly shutdown
+sleep 5
+sudo kill -INT $TCPFLOW_PID
+sleep 3
+wait $TCPFLOW_PID || true
+
+# explicitly sync filesystem to ensure writes complete
+# sudo sync
+
+# cleanup
+9fs umount mnt
+kill $SOCAT_PID
+wait $SOCAT_PID || true
+
+# fix permissions on capture files
+sudo chown -R $(whoami):$(id -gn) "$CAPTURE_DIR"
