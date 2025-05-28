@@ -608,37 +608,34 @@ async fn handle_existing_file_touch(
             )
             .unwrap();
 
-            if let Ok(updated_stat) = create_updated_stat(&rstat.stat, current_time, current_time) {
-                let wstat_msg = Message::Twstat(Twstat {
-                    fid: file_fid,
-                    stat: updated_stat,
-                });
-                send_message(
-                    conn,
-                    TaggedMessage {
-                        message: wstat_msg,
-                        tag,
-                    },
-                )
-                .await?;
+            let updated_stat = create_updated_stat(&rstat.stat, current_time, current_time);
+            let wstat_msg = Message::Twstat(Twstat {
+                fid: file_fid,
+                stat: updated_stat,
+            });
+            send_message(
+                conn,
+                TaggedMessage {
+                    message: wstat_msg,
+                    tag,
+                },
+            )
+            .await?;
 
-                if let Ok(response) = receive_message(conn).await {
-                    match response.message {
-                        Message::Rwstat(_) => {
-                            println!("updated access and modification times for: {path}");
-                        }
-                        Message::Rerror(err) => {
-                            eprintln!("warning: Could not update file times: {}", err.ename);
-                            println!("file exists: {path}");
-                        }
-                        _ => {
-                            eprintln!("warning: Unexpected response to Twstat");
-                            println!("file exists: {path}");
-                        }
+            if let Ok(response) = receive_message(conn).await {
+                match response.message {
+                    Message::Rwstat(_) => {
+                        println!("updated access and modification times for: {path}");
+                    }
+                    Message::Rerror(err) => {
+                        eprintln!("warning: Could not update file times: {}", err.ename);
+                        println!("file exists: {path}");
+                    }
+                    _ => {
+                        eprintln!("warning: Unexpected response to Twstat");
+                        println!("file exists: {path}");
                     }
                 }
-            } else {
-                println!("file exists: {path}");
             }
         }
         Message::Rerror(err) => {
@@ -1108,8 +1105,18 @@ async fn read_and_output_file(conn: &mut Connection, tag: u16, fid: u32, msize: 
     Ok(())
 }
 
-fn create_updated_stat(_current_stat: &Stat, _atime: u32, _mtime: u32) -> Result<Stat> {
-    unimplemented!("stat writing");
+fn create_updated_stat(current_stat: &Stat, atime: u32, mtime: u32) -> Stat {
+    let mut stat = Stat::new_dont_touch();
+
+    // update only the timestamp fields
+    stat.atime = atime;
+    stat.mtime = mtime;
+
+    // preserve the type and qid type from the current stat
+    stat.r#type = current_stat.r#type;
+    stat.qid.qtype = current_stat.qid.qtype;
+
+    stat
 }
 
 fn dump_messages_command(path: &PathBuf) -> Result<()> {
