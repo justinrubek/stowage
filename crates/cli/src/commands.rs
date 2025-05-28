@@ -9,6 +9,7 @@ pub(crate) struct Args {
 
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum Commands {
+    Debug(DebugCommand),
     Fs(FileCommand),
     Server(ServerCommand),
 }
@@ -66,4 +67,16 @@ pub(crate) enum FileCommands {
     Cat {
         path: String,
     },
+}
+
+#[derive(clap::Args, Debug)]
+pub(crate) struct DebugCommand {
+    #[clap(subcommand)]
+    pub command: DebugCommands,
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub(crate) enum DebugCommands {
+    /// Display the 9p messages contained in a binary file
+    DumpMessages { path: PathBuf },
 }

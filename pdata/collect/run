@@ -24,9 +24,20 @@ sleep 2
 
 # run test operations
 mkdir -p mnt
-9fs mount 'tcp!localhost!4500' mnt
+9fs mount -i 'tcp!localhost!4500' mnt
 
 ls mnt
+
+echo "Hello, 9P world!" > mnt/test.txt
+echo "Second line" >> mnt/test.txt
+mkdir mnt/subdir
+echo "Nested content" > mnt/subdir/nested.txt
+touch mnt/newfile.txt
+touch mnt/test.txt
+cat mnt/test.txt
+cat mnt/subdir/nested.txt
+ls -la mnt/
+ls -la mnt/subdir/
 
 # send SIGINT for orderly shutdown
 sleep 5

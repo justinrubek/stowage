@@ -2,19 +2,24 @@ use crate::{
     commands::{Commands, ServerCommands},
     error::Result,
 };
-use bytes::BytesMut;
+use bytes::{Buf, BytesMut};
 use clap::Parser;
+use commands::DebugCommands;
 use error::Error;
 use futures::{SinkExt, StreamExt};
-use std::sync::Arc;
+use std::{
+    io::{Cursor, Read},
+    path::PathBuf,
+    sync::Arc,
+};
 use stowage_filesystems::disk::Handler;
 use stowage_proto::{
-    consts::P9_NOFID, Message, MessageCodec, ParsedStat, TaggedMessage, Tattach, Tauth, Tclunk,
+    consts::P9_NOFID, Message, MessageCodec, Protocol, Stat, TaggedMessage, Tattach, Tauth, Tclunk,
     Tcreate, Topen, Tread, Tstat, Tversion, Twalk, Twrite, Twstat,
 };
 use stowage_service::Plan9;
 use tokio::net::{TcpListener, TcpStream};
-use tokio_util::codec::Framed;
+use tokio_util::codec::{Decoder, Framed};
 use tracing::{error, info};
 
 mod commands;
@@ -28,6 +33,9 @@ async fn main() -> Result<()> {
 
     let args = commands::Args::parse();
     match args.command {
+        Commands::Debug(debug) => match debug.command {
+            DebugCommands::DumpMessages { path } => dump_messages_command(path).await,
+        },
         Commands::Fs(fs) => {
             let cmd = fs.command;
 
@@ -346,21 +354,22 @@ async fn read_directory_contents(
                 }
 
                 let data_len = rread.data.len();
-                let mut bytes = BytesMut::from(&rread.data[..]);
+                let mut data_slice = &rread.data[..];
 
-                while !bytes.is_empty() {
-                    if bytes.len() < 2 {
+                // process each stat entry in the directory read response
+                while !data_slice.is_empty() {
+                    if data_slice.len() < 2 {
                         break;
                     }
 
-                    let stat_size = u16::from_le_bytes([bytes[0], bytes[1]]) as usize;
-                    if bytes.len() < stat_size + 2 {
+                    let stat_size = u16::from_le_bytes([data_slice[0], data_slice[1]]) as usize;
+                    if data_slice.len() < stat_size + 2 {
                         break;
                     }
 
-                    let stat_bytes = bytes.split_to(stat_size + 2);
+                    let mut cursor = Cursor::new(&data_slice[0..stat_size + 2]);
 
-                    match ParsedStat::from_bytes(&stat_bytes.freeze()) {
+                    match Stat::decode(&mut cursor) {
                         Ok(stat) => {
                             println!(
                                 "{:>8} {} {}",
@@ -372,6 +381,9 @@ async fn read_directory_contents(
                                     ""
                                 }
                             );
+
+                            // move to the next stat entry
+                            data_slice = &data_slice[stat_size + 2..];
                         }
                         Err(e) => {
                             eprintln!("Warning: Failed to parse stat: {e}");
@@ -587,61 +599,53 @@ async fn handle_existing_file_touch(
 
     let response = receive_message(conn).await?;
     match response.message {
-        Message::Rstat(rstat) => match ParsedStat::from_bytes(&rstat.stat) {
-            Ok(stat) => {
-                if stat.mode & 0x8000_0000 != 0 {
-                    cleanup_fid(conn, tag, file_fid).await?;
-                    return Err(Error::Other(format!("touch: {path}: Is a directory")));
-                }
+        Message::Rstat(rstat) => {
+            if rstat.stat.mode & 0x8000_0000 != 0 {
+                cleanup_fid(conn, tag, file_fid).await?;
+                return Err(Error::Other(format!("touch: {path}: Is a directory")));
+            }
 
-                let current_time = u32::try_from(
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs(),
+            let current_time = u32::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            )
+            .unwrap();
+
+            if let Ok(updated_stat) = create_updated_stat(&rstat.stat, current_time, current_time) {
+                let wstat_msg = Message::Twstat(Twstat {
+                    fid: file_fid,
+                    stat: updated_stat,
+                });
+                send_message(
+                    conn,
+                    TaggedMessage {
+                        message: wstat_msg,
+                        tag,
+                    },
                 )
-                .unwrap();
+                .await?;
 
-                if let Ok(updated_stat) =
-                    create_updated_stat_bytes(&stat, current_time, current_time)
-                {
-                    let wstat_msg = Message::Twstat(Twstat {
-                        fid: file_fid,
-                        stat: updated_stat,
-                    });
-                    send_message(
-                        conn,
-                        TaggedMessage {
-                            message: wstat_msg,
-                            tag,
-                        },
-                    )
-                    .await?;
-
-                    if let Ok(response) = receive_message(conn).await {
-                        match response.message {
-                            Message::Rwstat(_) => {
-                                println!("Updated access and modification times for: {path}");
-                            }
-                            Message::Rerror(err) => {
-                                eprintln!("Warning: Could not update file times: {}", err.ename);
-                                println!("File exists: {path}");
-                            }
-                            _ => {
-                                eprintln!("Warning: Unexpected response to Twstat");
-                                println!("File exists: {path}");
-                            }
+                if let Ok(response) = receive_message(conn).await {
+                    match response.message {
+                        Message::Rwstat(_) => {
+                            println!("Updated access and modification times for: {path}");
+                        }
+                        Message::Rerror(err) => {
+                            eprintln!("Warning: Could not update file times: {}", err.ename);
+                            println!("File exists: {path}");
+                        }
+                        _ => {
+                            eprintln!("Warning: Unexpected response to Twstat");
+                            println!("File exists: {path}");
                         }
                     }
-                } else {
-                    println!("File exists: {path}");
                 }
-            }
-            Err(e) => {
-                eprintln!("Warning: Failed to parse stat: {e}");
+            } else {
                 println!("File exists: {path}");
             }
-        },
+        }
         Message::Rerror(err) => {
             return Err(Error::Other(format!(
                 "Failed to get file stat: {}",
@@ -1109,32 +1113,68 @@ async fn read_and_output_file(conn: &mut Connection, tag: u16, fid: u32, msize: 
     Ok(())
 }
 
-fn create_updated_stat_bytes(
-    _current_stat: &ParsedStat,
-    _atime: u32,
-    _mtime: u32,
-) -> Result<bytes::Bytes> {
+fn create_updated_stat(_current_stat: &Stat, _atime: u32, _mtime: u32) -> Result<Stat> {
     unimplemented!("stat writing");
 }
 
-fn get_file_length_from_stat(stat_bytes: &[u8]) -> Result<u64> {
-    const LENGTH_OFFSET: usize = 35;
+fn get_file_length_from_stat(stat_bytes: &Stat) -> Result<u64> {
+    todo!()
+}
 
-    if stat_bytes.len() < LENGTH_OFFSET + 8 {
-        return Err("Stat bytes too short to contain length field".into());
+async fn dump_messages_command(path: PathBuf) -> Result<()> {
+    use bytes::BytesMut;
+    use std::fs;
+
+    info!("reading 9p messages from: {}", path.display());
+
+    // Read the binary file
+    let data = fs::read(&path)
+        .map_err(|e| Error::Other(format!("Failed to read file {}: {}", path.display(), e)))?;
+
+    if data.is_empty() {
+        println!("File is empty");
+        return Ok(());
     }
 
-    let length_bytes = &stat_bytes[LENGTH_OFFSET..LENGTH_OFFSET + 8];
-    let length = u64::from_le_bytes([
-        length_bytes[0],
-        length_bytes[1],
-        length_bytes[2],
-        length_bytes[3],
-        length_bytes[4],
-        length_bytes[5],
-        length_bytes[6],
-        length_bytes[7],
-    ]);
+    // Create decoder and buffer
+    let mut codec = MessageCodec::new();
+    let mut buf = BytesMut::from(&data[..]);
+    let mut message_count = 0;
 
-    Ok(length)
+    // Decode messages one by one
+    while !buf.is_empty() {
+        match codec.decode(&mut buf) {
+            Ok(Some(message)) => {
+                message_count += 1;
+
+                // Determine message direction
+                let direction = match message.message_type().to_u8() {
+                    100 | 102 | 104 | 108 | 110 | 112 | 114 | 116 | 118 | 120 | 122 | 124 | 126 => {
+                        "<-"
+                    }
+                    _ => "->",
+                };
+
+                println!("{} {}", direction, message);
+                if let Message::Rstat(rstat) = &message.message {
+                    println!("{:?}", rstat.stat);
+                }
+            }
+            Ok(None) => {
+                // No complete message available
+                if !buf.is_empty() {
+                    println!("Incomplete message data: {} bytes", buf.len());
+                }
+                break;
+            }
+            Err(e) => {
+                println!("Error decoding message: {}", e);
+                println!("Remaining buffer: {} bytes", buf.len());
+                break;
+            }
+        }
+    }
+
+    println!("\nTotal messages: {}", message_count);
+    Ok(())
 }

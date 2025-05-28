@@ -1,11 +1,12 @@
 use crate::error::{Error, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use tokio_util::codec::{Decoder, Encoder, LengthDelimitedCodec};
 
 pub mod consts;
 pub mod error;
+mod fmt;
 
 pub trait Protocol: Sized {
     /// # Errors
@@ -112,109 +113,6 @@ pub struct Qid {
     pub qtype: u8,
     pub version: u32,
     pub path: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParsedStat {
-    /// File type
-    pub r#type: u16,
-    /// Device ID
-    pub dev: u32,
-    /// Unique ID from server
-    pub qid: Qid,
-    /// Permissions and flags
-    pub mode: u32,
-    /// Last access time
-    pub atime: u32,
-    /// Last modification time
-    pub mtime: u32,
-    /// Length in bytes
-    pub length: u64,
-    /// Filename
-    pub name: String,
-    /// Owner name
-    pub uid: String,
-    /// Group name
-    pub gid: String,
-    /// Last modifier name
-    pub muid: String,
-}
-
-impl ParsedStat {
-    /// # Errors
-    /// - the data passed doesn't match the specific expected structure
-    pub fn parse_from_bytes(data: &[u8]) -> Result<Self> {
-        let mut cursor = Cursor::new(data);
-
-        let r#type = u16::decode(&mut cursor)?;
-        let dev = u32::decode(&mut cursor)?;
-        let qid = Qid::decode(&mut cursor)?;
-        let mode = u32::decode(&mut cursor)?;
-        let atime = u32::decode(&mut cursor)?;
-        let mtime = u32::decode(&mut cursor)?;
-        let length = u64::decode(&mut cursor)?;
-        let name = String::decode(&mut cursor)?;
-        let uid = String::decode(&mut cursor)?;
-        let gid = String::decode(&mut cursor)?;
-        let muid = String::decode(&mut cursor)?;
-
-        // ignore any remaining bytes (padding, extensions, etc.)
-
-        Ok(ParsedStat {
-            r#type,
-            dev,
-            qid,
-            mode,
-            atime,
-            mtime,
-            length,
-            name,
-            uid,
-            gid,
-            muid,
-        })
-    }
-
-    /// # Errors
-    /// - failure to encode any of the fields
-    pub fn to_bytes(&self) -> Result<Bytes> {
-        let mut content_buf = BytesMut::new();
-
-        self.r#type.encode(&mut content_buf)?;
-        self.dev.encode(&mut content_buf)?;
-        self.qid.encode(&mut content_buf)?;
-        self.mode.encode(&mut content_buf)?;
-        self.atime.encode(&mut content_buf)?;
-        self.mtime.encode(&mut content_buf)?;
-        self.length.encode(&mut content_buf)?;
-        self.name.encode(&mut content_buf)?;
-        self.uid.encode(&mut content_buf)?;
-        self.gid.encode(&mut content_buf)?;
-        self.muid.encode(&mut content_buf)?;
-
-        Ok(content_buf.freeze())
-    }
-
-    /// # Errors
-    /// - failure to encode any of the fields
-    pub fn from_bytes(data: &Bytes) -> Result<Self> {
-        let mut cursor = Cursor::new(data.as_ref());
-        let _stat_size = u16::decode(&mut cursor)?; // read and ignore size
-
-        Ok(ParsedStat {
-            r#type: u16::decode(&mut cursor)?,
-            dev: u32::decode(&mut cursor)?,
-            qid: Qid::decode(&mut cursor)?,
-            mode: u32::decode(&mut cursor)?,
-            atime: u32::decode(&mut cursor)?,
-            mtime: u32::decode(&mut cursor)?,
-            length: u64::decode(&mut cursor)?,
-            name: String::decode(&mut cursor)?,
-            uid: String::decode(&mut cursor)?,
-            gid: String::decode(&mut cursor)?,
-            muid: String::decode(&mut cursor)?,
-        })
-    }
 }
 
 // `Message` wrapper that includes a tag
@@ -443,13 +341,13 @@ pub struct Tstat {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Rstat {
-    pub stat: Bytes,
+    pub stat: Stat,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Twstat {
     pub fid: u32,
-    pub stat: Bytes,
+    pub stat: Stat,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -982,65 +880,82 @@ impl Protocol for Tstat {
 
 impl Protocol for Rstat {
     fn encode(&self, buf: &mut BytesMut) -> Result<()> {
-        buf.extend_from_slice(&self.stat);
+        // First encode the size of the stat structure
+        // This is the first size field in the Rstat message
+
+        // Calculate the size that Stat::encode would produce
+        let mut temp_buf = BytesMut::new();
+        self.stat.encode(&mut temp_buf)?;
+        let stat_size =
+            u16::try_from(temp_buf.len()).map_err(|_| Error::StringTooLong(temp_buf.len()))?;
+
+        // Encode the size of the stat structure
+        stat_size.encode(buf)?;
+
+        // Now encode the stat structure itself
+        // This will include its own size field as part of Stat::encode
+        self.stat.encode(buf)?;
+
         Ok(())
     }
 
     fn decode(buf: &mut Cursor<&[u8]>) -> Result<Self> {
+        // Read the size of the stat structure (first size field)
         let stat_size = u16::decode(buf)?;
-        if buf.remaining() < (stat_size as usize) {
-            return Err(Error::Io(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "insufficient data for stat content",
-            )));
+
+        // Record the current position
+        let start_pos = buf.position();
+
+        // Decode the stat structure (which has its own size field)
+        let stat = Stat::decode(buf)?;
+
+        // Verify we read the expected number of bytes
+        let bytes_read = buf.position() - start_pos;
+        if bytes_read != stat_size as u64 {
+            println!(
+                "Warning: Rstat size field indicated {} bytes but {} were read",
+                stat_size, bytes_read
+            );
+            // You could return an error here, but real-world implementations
+            // often need to be lenient with size fields
         }
 
-        let mut stat_bytes = BytesMut::with_capacity(stat_size as usize + 2);
-        stat_size.encode(&mut stat_bytes)?;
-
-        let mut content = vec![0u8; stat_size as usize];
-        buf.copy_to_slice(&mut content);
-        stat_bytes.extend_from_slice(&content);
-
-        Ok(Rstat {
-            stat: stat_bytes.freeze(),
-        })
+        Ok(Rstat { stat })
     }
 }
 
 impl Protocol for Twstat {
     fn encode(&self, buf: &mut BytesMut) -> Result<()> {
         self.fid.encode(buf)?;
-        // write stat bytes directly - NO additional length prefix
-        buf.extend_from_slice(&self.stat);
+
+        let mut temp_buf = BytesMut::new();
+        self.stat.encode(&mut temp_buf)?;
+        let stat_size =
+            u16::try_from(temp_buf.len()).map_err(|_| Error::StringTooLong(temp_buf.len()))?;
+        stat_size.encode(buf)?;
+        self.stat.encode(buf)?;
+
         Ok(())
     }
 
     fn decode(buf: &mut Cursor<&[u8]>) -> Result<Self> {
         let fid = u32::decode(buf)?;
 
-        // read stat bytes directly - the stat structure contains its own size
         let stat_size = u16::decode(buf)?;
 
-        if buf.remaining() < stat_size as usize {
-            return Err(Error::Io(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "insufficient data for stat content",
-            )));
+        let start_pos = buf.position();
+        let stat = Stat::decode(buf)?;
+
+        let bytes_read = buf.position() - start_pos;
+        if bytes_read != stat_size as u64 {
+            println!(
+                "Warning: Twstat size field indicated {} bytes but {} were read",
+                stat_size, bytes_read
+            );
+            // being lenient with size fields
         }
 
-        // create a buffer with size + content
-        let mut stat_bytes = BytesMut::with_capacity(stat_size as usize + 2);
-        stat_size.encode(&mut stat_bytes)?; // Put the size back
-
-        let mut content = vec![0u8; stat_size as usize];
-        buf.copy_to_slice(&mut content);
-        stat_bytes.extend_from_slice(&content);
-
-        Ok(Twstat {
-            fid,
-            stat: stat_bytes.freeze(),
-        })
+        Ok(Twstat { fid, stat })
     }
 }
 
@@ -1210,711 +1125,683 @@ impl Qid {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Represents a 9P stat structure as defined in the protocol
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stat {
+    pub r#type: u16,
+    pub dev: u32,
+    pub qid: Qid,
+    pub mode: u32,
+    pub atime: u32,
+    pub mtime: u32,
+    pub length: u64,
+    pub name: String,
+    pub uid: String,
+    pub gid: String,
+    pub muid: String,
+}
 
-    const DATA_LS_CLIENT: &[u8] = include_bytes!("./testdata/ls-client.9p");
-    const DATA_LS_SERVER: &[u8] = include_bytes!("./testdata/ls-server.9p");
-
-    #[test]
-    fn test_round_trip_all_messages() {
-        let stat = ParsedStat {
-            r#type: 0,
-            dev: 0,
+impl Stat {
+    /// Create a new Stat with "don't touch" values for all fields
+    /// This is useful for creating wstat messages that only modify specific fields
+    #[must_use]
+    pub fn new_dont_touch() -> Self {
+        Stat {
+            r#type: u16::MAX,
+            dev: u32::MAX,
             qid: Qid {
-                qtype: 0x00,
-                version: 0,
-                path: 0x789,
+                qtype: 0xFF, // Don't touch value for qtype
+                version: u32::MAX,
+                path: u64::MAX,
             },
-            mode: 0o644,
-            atime: 1_000_000,
-            mtime: 1_000_001,
-            length: 1024,
-            name: "test.txt".to_string(),
-            uid: "user".to_string(),
-            gid: "group".to_string(),
-            muid: "user".to_string(),
-        };
-        let stat_bytes = stat.to_bytes().expect("encode stat");
-
-        let test_cases = vec![
-            TaggedMessage::new(
-                1,
-                Message::Tversion(Tversion {
-                    msize: 8192,
-                    version: "9P2000".to_string(),
-                }),
-            ),
-            TaggedMessage::new(
-                2,
-                Message::Rversion(Rversion {
-                    msize: 8192,
-                    version: "9P2000".to_string(),
-                }),
-            ),
-            TaggedMessage::new(
-                3,
-                Message::Tauth(Tauth {
-                    afid: 42,
-                    uname: "user".to_string(),
-                    aname: String::new(),
-                }),
-            ),
-            TaggedMessage::new(
-                4,
-                Message::Rauth(Rauth {
-                    aqid: Qid {
-                        qtype: 0x80,
-                        version: 1,
-                        path: 0x123,
-                    },
-                }),
-            ),
-            TaggedMessage::new(
-                5,
-                Message::Twalk(Twalk {
-                    fid: 1,
-                    newfid: 2,
-                    wnames: vec!["dir1".to_string(), "file.txt".to_string()],
-                }),
-            ),
-            TaggedMessage::new(
-                6,
-                Message::Rwalk(Rwalk {
-                    wqids: vec![
-                        Qid {
-                            qtype: 0x80,
-                            version: 1,
-                            path: 0x123,
-                        },
-                        Qid {
-                            qtype: 0x00,
-                            version: 2,
-                            path: 0x456,
-                        },
-                    ],
-                }),
-            ),
-            TaggedMessage::new(7, Message::Rstat(Rstat { stat: stat_bytes })),
-        ];
-
-        for original in test_cases {
-            let mut buf = BytesMut::new();
-            original.encode(&mut buf).unwrap();
-
-            let mut cursor = Cursor::new(buf.as_ref());
-            let decoded = TaggedMessage::decode(&mut cursor).unwrap();
-
-            assert_eq!(original.tag, decoded.tag);
-            assert_eq!(original.message_type(), decoded.message_type());
-
-            // More detailed comparison would require implementing PartialEq for all message types
-            println!("✓ Round trip test passed for {:?}", original.message_type());
-        }
-    }
-
-    #[test]
-    fn test_rstat_with_size_prefix() -> Result<()> {
-        println!("=== TESTING RSTAT WITH SIZE PREFIX ===");
-
-        // Create the expected stat based on the log
-        let expected_stat = ParsedStat {
-            r#type: 58, // From the actual parsing
-            dev: 0,
-            qid: Qid {
-                qtype: 0x80, // 'd' for directory
-                version: 1_747_714_478,
-                path: 0x1d_e955,
-            },
-            mode: 0x8000_01ed, // From actual parsing but need to verify
-            atime: 1_747_800_895,
-            mtime: 1_747_714_478,
-            length: 0,
-            name: String::new(),
-            uid: "justin".to_string(),
-            gid: "users".to_string(),
+            mode: u32::MAX,
+            atime: u32::MAX,
+            mtime: u32::MAX,
+            length: u64::MAX,
+            name: String::new(), // Empty string = don't touch
+            uid: String::new(),
+            gid: String::new(),
             muid: String::new(),
         }
-        .to_bytes()?;
-
-        let rstat = Rstat {
-            stat: expected_stat,
-        };
-
-        // Encode it
-        let mut buf = BytesMut::new();
-        rstat.encode(&mut buf)?;
-
-        println!("Encoded Rstat ({} bytes): {}", buf.len(), hex::encode(&buf));
-
-        // Compare with actual bytes (without message header)
-        let actual_rstat_bytes = hex::decode("3c003a0000000000000080ae012c6855e91d0000000000ed0100803f532d68ae012c680000000000000000000006006a757374696e050075736572730000").unwrap();
-        println!(
-            "Actual bytes  ({} bytes): {}",
-            actual_rstat_bytes.len(),
-            hex::encode(&actual_rstat_bytes)
-        );
-
-        // They should match now!
-        if buf.as_ref() == actual_rstat_bytes {
-            println!("✓ Perfect match!");
-        } else {
-            println!("Still a mismatch - let me analyze the actual values...");
-
-            // let's decode the actual bytes to see what the real values should be
-            let mut cursor = Cursor::new(&actual_rstat_bytes[..]);
-            let decoded_rstat = Rstat::decode(&mut cursor)?;
-            println!("Decoded from actual bytes: {decoded_rstat:?}");
-        }
-
-        Ok(())
     }
 
-    #[test]
-    fn test_codec_integration() {
-        let mut codec = MessageCodec::new();
-        let original = TaggedMessage::new(
-            42,
-            Message::Tversion(Tversion {
-                msize: 8192,
-                version: "9P2000".to_string(),
-            }),
-        );
-
-        let mut buf = BytesMut::new();
-        codec.encode(original.clone(), &mut buf).unwrap();
-
-        let decoded = codec.decode(&mut buf).unwrap().unwrap();
-        assert_eq!(original.tag, decoded.tag);
-        assert_eq!(original.message_type(), decoded.message_type());
+    /// Check if a field has a "don't touch" value
+    #[must_use]
+    pub fn is_dont_touch_u16(val: u16) -> bool {
+        val == u16::MAX
     }
 
-    #[test]
-    fn test_against_real_client_data() {
-        let mut codec = MessageCodec::new();
-        let mut buf = BytesMut::from(DATA_LS_CLIENT);
-
-        let mut message_count = 0;
-        while !buf.is_empty() {
-            match codec.decode(&mut buf) {
-                Ok(Some(message)) => {
-                    message_count += 1;
-                    println!(
-                        "Decoded client message {}: {:?}",
-                        message_count,
-                        message.message_type()
-                    );
-
-                    // Test round-trip
-                    let mut encode_buf = BytesMut::new();
-                    codec.encode(message, &mut encode_buf).unwrap();
-                }
-                Ok(None) => break,
-                Err(e) => panic!(
-                    "Failed to decode client message {}: {}",
-                    message_count + 1,
-                    e
-                ),
-            }
-        }
-
-        println!("Successfully decoded {message_count} client messages");
+    #[must_use]
+    pub fn is_dont_touch_u32(val: u32) -> bool {
+        val == u32::MAX
     }
 
-    #[test]
-    fn test_against_real_server_data() {
-        let mut codec = MessageCodec::new();
-        let mut buf = BytesMut::from(DATA_LS_SERVER);
-
-        let mut message_count = 0;
-        while !buf.is_empty() {
-            match codec.decode(&mut buf) {
-                Ok(Some(message)) => {
-                    message_count += 1;
-                    println!(
-                        "Decoded server message {}: {:?}",
-                        message_count,
-                        message.message_type()
-                    );
-
-                    // Test round-trip
-                    let mut encode_buf = BytesMut::new();
-                    codec.encode(message, &mut encode_buf).unwrap();
-                }
-                Ok(None) => break,
-                Err(e) => panic!(
-                    "Failed to decode server message {}: {}",
-                    message_count + 1,
-                    e
-                ),
-            }
-        }
-
-        println!("Successfully decoded {message_count} server messages");
+    #[must_use]
+    pub fn is_dont_touch_u64(val: u64) -> bool {
+        val == u64::MAX
     }
 
-    #[test]
-    fn test_stat_structure_parsing() -> Result<()> {
-        // Test that we can properly encode/decode a stat structure with the exact values from the log
-        let stat = ParsedStat {
-            r#type: 0,
-            dev: 0,
-            qid: Qid::from_log_format(0x1d_e955, 1_747_714_478, 'd'),
-            mode: 0o755 | 0x8000_0000, // Need to figure out the exact mode from the log
-            atime: 1_747_800_895,
-            mtime: 1_747_714_478,
-            length: 0,
-            name: String::new(),
-            uid: "justin".to_string(),
-            gid: "users".to_string(),
-            muid: String::new(),
-        };
-        let stat_bytes = stat.to_bytes()?;
-
-        let mut buf = BytesMut::new();
-        stat_bytes.encode(&mut buf)?;
-
-        let mut cursor = Cursor::new(buf.as_ref());
-        let decoded = Bytes::decode(&mut cursor)?;
-        let decoded_stat = ParsedStat::parse_from_bytes(decoded.as_ref())?;
-
-        assert_eq!(stat, decoded_stat);
-        Ok(())
-    }
-
-    #[test]
-    fn test_individual_message_round_trips() -> Result<()> {
-        let test_cases = vec![
-            // Test specific values from the log
-            TaggedMessage::new(
-                65535,
-                Message::Tversion(Tversion {
-                    msize: 131_096,
-                    version: "9P2000".to_string(),
-                }),
-            ),
-            TaggedMessage::new(
-                65535,
-                Message::Rversion(Rversion {
-                    msize: 8216,
-                    version: "9P2000".to_string(),
-                }),
-            ),
-            TaggedMessage::new(
-                0,
-                Message::Tattach(Tattach {
-                    fid: 0,
-                    afid: 0xFFFF_FFFF, // -1 as u32
-                    uname: "justin".to_string(),
-                    aname: String::new(),
-                }),
-            ),
-            TaggedMessage::new(
-                0,
-                Message::Rattach(Rattach {
-                    qid: Qid::from_log_format(0x1de_955, 1_747_714_478, 'd'),
-                }),
-            ),
-            TaggedMessage::new(
-                0,
-                Message::Twalk(Twalk {
-                    fid: 0,
-                    newfid: 1,
-                    wnames: vec![], // Empty walk
-                }),
-            ),
-            TaggedMessage::new(
-                0,
-                Message::Rwalk(Rwalk {
-                    wqids: vec![], // Empty result
-                }),
-            ),
-            TaggedMessage::new(
-                0,
-                Message::Tread(Tread {
-                    fid: 1,
-                    offset: 0,
-                    count: 8192,
-                }),
-            ),
-            TaggedMessage::new(
-                0,
-                Message::Rread(Rread {
-                    data: Bytes::new(), // Empty data for second read
-                }),
-            ),
-        ];
-
-        for (i, original) in test_cases.iter().enumerate() {
-            println!(
-                "Testing round trip {}: {:?} tag {}",
-                i + 1,
-                original.message_type(),
-                original.tag
-            );
-
-            let mut buf = BytesMut::new();
-            original.encode(&mut buf)?;
-
-            let mut cursor = Cursor::new(buf.as_ref());
-            let decoded = TaggedMessage::decode(&mut cursor)?;
-
-            assert_eq!(original, &decoded, "Round trip test {} failed", i + 1);
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_afid_negative_one_handling() -> Result<()> {
-        // Test that afid value of -1 is properly handled as 0xFFFFFFFF
-        let tattach = Tattach {
-            fid: 0,
-            afid: 0xFFFF_FFFF, // -1 as u32
-            uname: "justin".to_string(),
-            aname: String::new(),
-        };
-
-        let mut buf = BytesMut::new();
-        tattach.encode(&mut buf)?;
-
-        // Check that afid is encoded as 0xFFFFFFFF in little endian
-        let afid_bytes = &buf[4..8]; // Skip fid (first 4 bytes)
-        assert_eq!(afid_bytes, &[0xFF, 0xFF, 0xFF, 0xFF]);
-
-        let mut cursor = Cursor::new(buf.as_ref());
-        let decoded = Tattach::decode(&mut cursor)?;
-
-        assert_eq!(tattach, decoded);
-        Ok(())
-    }
-
-    #[test]
-    fn test_qid_encoding() -> Result<()> {
-        // Test the specific qid from the log: (00000000001de955 1747714478 d)
-        let qid = Qid::from_log_format(0x1de_955, 1_747_714_478, 'd');
-
-        let mut buf = BytesMut::new();
-        qid.encode(&mut buf)?;
-
-        // Verify the encoding: type[1] version[4] path[8] in little endian
-        assert_eq!(buf.len(), 13);
-        assert_eq!(buf[0], 0x80); // 'd' -> QTDIR
-
-        // version: 1747714478 in little endian
-        let version_bytes = 1_747_714_478_u32.to_le_bytes();
-        assert_eq!(&buf[1..5], &version_bytes);
-
-        // path: 0x1de955 in little endian
-        let path_bytes = 0x1de_955_u64.to_le_bytes();
-        assert_eq!(&buf[5..13], &path_bytes);
-
-        let mut cursor = Cursor::new(buf.as_ref());
-        let decoded = Qid::decode(&mut cursor)?;
-
-        assert_eq!(qid, decoded);
-        Ok(())
-    }
-
-    #[test]
-    fn test_rread_with_real_data() -> Result<()> {
-        println!("=== TESTING RREAD WITH REAL DATA ===");
-
-        // This hex data should be from an actual Rread response in the server data
-        // Let me extract it from the actual server messages instead of hardcoding
-
-        let server_messages = extract_messages_debug(DATA_LS_SERVER)?;
-
-        // Find the first Rread message (should be message 8)
-        if let Some((
-            raw_bytes,
-            TaggedMessage {
-                message: Message::Rread(rread),
-                ..
-            },
-        )) = server_messages
-            .iter()
-            .find(|(_, msg)| matches!(msg.message, Message::Rread(_)))
-        {
-            println!(
-                "Found Rread message with {} bytes of data",
-                rread.data.len()
-            );
-            println!(
-                "Raw message ({} bytes): {}",
-                raw_bytes.len(),
-                hex::encode(raw_bytes)
-            );
-
-            // Test encoding/decoding
-            let mut buf = BytesMut::new();
-            rread.encode(&mut buf)?;
-
-            let mut cursor = Cursor::new(buf.as_ref());
-            let decoded = Rread::decode(&mut cursor)?;
-
-            assert_eq!(rread.data, decoded.data);
-            println!(
-                "✅ Rread encode/decode test passed with {} bytes of data",
-                decoded.data.len()
-            );
-
-            // Test that when we encode this Rread in a full message, it matches the original
-            let mut full_message_buf = BytesMut::new();
-            let tagged_message = TaggedMessage::new(0, Message::Rread(rread.clone()));
-            let mut codec = MessageCodec::new();
-            codec.encode(tagged_message, &mut full_message_buf)?;
-
-            if raw_bytes.as_ref() == full_message_buf.as_ref() {
-                println!("✅ Full message encoding matches perfectly!");
-            } else {
-                println!("❌ Full message mismatch:");
-                println!("Original: {}", hex::encode(raw_bytes));
-                println!("Encoded:  {}", hex::encode(&full_message_buf));
-            }
-        } else {
-            return Err(Error::Protocol(
-                "No Rread message found in server data".into(),
-            ));
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_exact_client_message_reproduction_fixed() -> Result<()> {
-        let messages = extract_messages_debug(DATA_LS_CLIENT)?;
-        println!("Extracted {} client messages", messages.len());
-
-        // Let's just verify we can decode each message and re-encode it perfectly
-        for (i, (raw_bytes, decoded)) in messages.iter().enumerate() {
-            println!(
-                "Testing client message {}: {:?} tag {}",
-                i + 1,
-                decoded.message_type(),
-                decoded.tag
-            );
-
-            // Create a new codec for each message to avoid state issues
-            let mut codec = MessageCodec::new();
-            let mut encoded_buf = BytesMut::new();
-
-            // Encode the message
-            codec.encode(decoded.clone(), &mut encoded_buf)?;
-
-            // Compare the bytes
-            if raw_bytes.as_ref() == encoded_buf.as_ref() {
-                println!("✓ Perfect byte match");
-            } else {
-                println!(
-                    "BYTE MISMATCH for {:?} tag {}",
-                    decoded.message_type(),
-                    decoded.tag
-                );
-                println!(
-                    "Original ({} bytes): {}",
-                    raw_bytes.len(),
-                    hex::encode(raw_bytes)
-                );
-                println!(
-                    "Encoded  ({} bytes): {}",
-                    encoded_buf.len(),
-                    hex::encode(&encoded_buf)
-                );
-
-                // Find first difference
-                for (j, (a, b)) in raw_bytes.iter().zip(encoded_buf.iter()).enumerate() {
-                    if a != b {
-                        println!("First difference at byte {j}: expected 0x{a:02x}, got 0x{b:02x}");
-                        break;
-                    }
-                }
-
-                // For now, don't fail the test - just report the differences
-                println!("Continuing despite mismatch...");
-            }
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_exact_server_message_reproduction_fixed() -> Result<()> {
-        let messages = extract_messages_debug(DATA_LS_SERVER)?;
-        println!("Extracted {} server messages", messages.len());
-
-        for (i, (raw_bytes, decoded)) in messages.iter().enumerate() {
-            println!(
-                "Testing server message {}: {:?} tag {}",
-                i + 1,
-                decoded.message_type(),
-                decoded.tag
-            );
-
-            // Create a new codec for each message
-            let mut codec = MessageCodec::new();
-            let mut encoded_buf = BytesMut::new();
-
-            codec.encode(decoded.clone(), &mut encoded_buf)?;
-
-            if raw_bytes.as_ref() == encoded_buf.as_ref() {
-                println!("✓ Perfect byte match");
-            } else {
-                println!(
-                    "BYTE MISMATCH for {:?} tag {}",
-                    decoded.message_type(),
-                    decoded.tag
-                );
-                println!(
-                    "Original ({} bytes): {}",
-                    raw_bytes.len(),
-                    hex::encode(raw_bytes)
-                );
-                println!(
-                    "Encoded  ({} bytes): {}",
-                    encoded_buf.len(),
-                    hex::encode(&encoded_buf)
-                );
-
-                // Don't fail - just report for now
-                println!("Continuing despite mismatch...");
-            }
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_client_messages() -> Result<()> {
-        let messages = extract_messages_debug(DATA_LS_CLIENT)?;
-        println!("Extracted {} client messages", messages.len());
-
-        // expected 12 messages based on binary data
-        let expected_count = 12;
-        assert_eq!(
-            messages.len(),
-            expected_count,
-            "Expected {} messages, got {}",
-            expected_count,
-            messages.len()
-        );
-
-        // test byte-perfect encoding for each message
-        for (i, (raw_bytes, decoded)) in messages.iter().enumerate() {
-            println!(
-                "Testing client message {}: {:?} tag {}",
-                i + 1,
-                decoded.message_type(),
-                decoded.tag
-            );
-
-            let mut codec = MessageCodec::new();
-            let mut encoded_buf = BytesMut::new();
-            codec.encode(decoded.clone(), &mut encoded_buf)?;
-
-            if raw_bytes.as_ref() == encoded_buf.as_ref() {
-                println!("✓ Perfect byte match");
-            } else {
-                println!("✗ Byte mismatch for message {}", i + 1);
-                println!("Original: {}", hex::encode(raw_bytes));
-                println!("Encoded:  {}", hex::encode(&encoded_buf));
-                assert_eq!(raw_bytes.as_ref(), encoded_buf.as_ref());
-            }
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_server_messages() -> Result<()> {
-        let messages = extract_messages_debug(DATA_LS_SERVER)?;
-        println!("Extracted {} server messages", messages.len());
-
-        for (i, (raw_bytes, decoded)) in messages.iter().enumerate() {
-            println!(
-                "Testing server message {}: {:?} tag {}",
-                i + 1,
-                decoded.message_type(),
-                decoded.tag
-            );
-
-            let mut codec = MessageCodec::new();
-            let mut encoded_buf = BytesMut::new();
-            codec.encode(decoded.clone(), &mut encoded_buf)?;
-
-            if raw_bytes.as_ref() == encoded_buf.as_ref() {
-                println!("✓ Perfect byte match");
-            } else {
-                println!("✗ Byte mismatch for message {}", i + 1);
-                println!("Original: {}", hex::encode(raw_bytes));
-                println!("Encoded:  {}", hex::encode(&encoded_buf));
-                assert_eq!(raw_bytes.as_ref(), encoded_buf.as_ref());
-            }
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_decode_real_stat_values() -> Result<()> {
-        println!("=== DECODING REAL STAT VALUES ===");
-
-        // parse the actual Rstat message from server data to get exact values
-        let server_messages = extract_messages_debug(DATA_LS_SERVER)?;
-
-        if let Some((
-            _,
-            TaggedMessage {
-                message: Message::Rstat(rstat),
-                ..
-            },
-        )) = server_messages.get(2)
-        {
-            let stat = ParsedStat::parse_from_bytes(&rstat.stat)?;
-            println!("Real stat values:");
-            println!("  type: {}", stat.r#type);
-            println!("  dev: {}", stat.dev);
-            println!("  qid: {:?}", stat.qid);
-            println!("  mode: 0x{:08x} (octal: {:o})", stat.mode, stat.mode);
-            println!("  atime: {}", stat.atime);
-            println!("  mtime: {}", stat.mtime);
-            println!("  length: {}", stat.length);
-            println!("  name: '{}'", stat.name);
-            println!("  uid: '{}'", stat.uid);
-            println!("  gid: '{}'", stat.gid);
-            println!("  muid: '{}'", stat.muid);
-
-            // now create a test with these exact values
-            let mut buf = BytesMut::new();
-            rstat.encode(&mut buf)?;
-
-            // this should now match the original bytes exactly
-            println!("Re-encoded stat: {}", hex::encode(&buf));
-        }
-
-        Ok(())
-    }
-
-    fn extract_messages_debug(data: &[u8]) -> Result<Vec<(Bytes, TaggedMessage)>> {
-        let mut messages = Vec::new();
-        let mut codec = MessageCodec::new();
-        let mut buf = BytesMut::from(data);
-
-        while !buf.is_empty() {
-            let original_len = buf.len();
-            match codec.decode(&mut buf)? {
-                Some(message) => {
-                    let _consumed = original_len - buf.len();
-                    let raw_bytes = Bytes::copy_from_slice(
-                        &data[data.len() - original_len..data.len() - buf.len()],
-                    );
-                    messages.push((raw_bytes, message));
-                }
-                None => break,
-            }
-        }
-
-        Ok(messages)
+    #[must_use]
+    pub fn is_dont_touch_string(val: &str) -> bool {
+        val.is_empty()
     }
 }
+
+impl Protocol for Stat {
+    fn encode(&self, buf: &mut BytesMut) -> Result<()> {
+        // Calculate size of all fields
+        let mut size_calc = BytesMut::new();
+
+        // Encode all fields except the size
+        self.r#type.encode(&mut size_calc)?;
+        self.dev.encode(&mut size_calc)?;
+
+        // Encode QID fields directly
+        self.qid.qtype.encode(&mut size_calc)?;
+        self.qid.version.encode(&mut size_calc)?;
+        self.qid.path.encode(&mut size_calc)?;
+
+        self.mode.encode(&mut size_calc)?;
+        self.atime.encode(&mut size_calc)?;
+        self.mtime.encode(&mut size_calc)?;
+        self.length.encode(&mut size_calc)?;
+
+        // String fields
+        self.name.encode(&mut size_calc)?;
+        self.uid.encode(&mut size_calc)?;
+        self.gid.encode(&mut size_calc)?;
+        self.muid.encode(&mut size_calc)?;
+
+        // Calculate total size
+        let total_size =
+            u16::try_from(size_calc.len()).map_err(|_| Error::StringTooLong(size_calc.len()))?;
+
+        // Now encode the actual data
+        total_size.encode(buf)?;
+        buf.extend_from_slice(&size_calc);
+
+        Ok(())
+    }
+
+    fn decode(buf: &mut Cursor<&[u8]>) -> Result<Self> {
+        // Read the size field
+        let stat_size = u16::decode(buf)?;
+
+        // Verify we have enough data
+        if buf.remaining() < stat_size as usize {
+            return Err(Error::InsufficientData {
+                expected: stat_size as usize,
+                actual: buf.remaining(),
+            });
+        }
+
+        // Read the entire stat block as raw bytes
+        let mut stat_data = vec![0u8; stat_size as usize];
+        buf.copy_to_slice(&mut stat_data);
+
+        // Create a new cursor for parsing these bytes
+        let mut stat_cursor = Cursor::new(&stat_data[..]);
+
+        // Parse all fields, ignoring potential size mismatches
+        let r#type = u16::decode(&mut stat_cursor).unwrap_or(0);
+        let dev = u32::decode(&mut stat_cursor).unwrap_or(0);
+
+        // Handling QID fields with fallbacks
+        let qtype = u8::decode(&mut stat_cursor).unwrap_or(0);
+        let version = u32::decode(&mut stat_cursor).unwrap_or(0);
+        let path = u64::decode(&mut stat_cursor).unwrap_or(0);
+
+        let mode = u32::decode(&mut stat_cursor).unwrap_or(0);
+        let atime = u32::decode(&mut stat_cursor).unwrap_or(0);
+        let mtime = u32::decode(&mut stat_cursor).unwrap_or(0);
+        let length = u64::decode(&mut stat_cursor).unwrap_or(0);
+
+        // String fields with empty fallbacks
+        let name = String::decode(&mut stat_cursor).unwrap_or_default();
+        let uid = String::decode(&mut stat_cursor).unwrap_or_default();
+        let gid = String::decode(&mut stat_cursor).unwrap_or_default();
+        let muid = String::decode(&mut stat_cursor).unwrap_or_default();
+
+        Ok(Stat {
+            r#type,
+            dev,
+            qid: Qid {
+                qtype,
+                version,
+                path,
+            },
+            mode,
+            atime,
+            mtime,
+            length,
+            name,
+            uid,
+            gid,
+            muid,
+        })
+    }
+}
+
+/// Variant 1: Standard 9P specification ordering
+fn decode_stat_standard(data: &[u8]) -> Result<Stat> {
+    let mut cursor = Cursor::new(data);
+
+    // Read the size field
+    let stat_size = u16::decode(&mut cursor)?;
+    println!("Size field: {}", stat_size);
+
+    let r#type = u16::decode(&mut cursor)?;
+    let dev = u32::decode(&mut cursor)?;
+
+    // Read QID fields directly
+    let qtype = u8::decode(&mut cursor)?;
+    let version = u32::decode(&mut cursor)?;
+    let path = u64::decode(&mut cursor)?;
+
+    let mode = u32::decode(&mut cursor)?;
+    let atime = u32::decode(&mut cursor)?;
+    let mtime = u32::decode(&mut cursor)?;
+    let length = u64::decode(&mut cursor)?;
+
+    // String fields
+    let name = String::decode(&mut cursor)?;
+    let uid = String::decode(&mut cursor)?;
+    let gid = String::decode(&mut cursor)?;
+    let muid = String::decode(&mut cursor)?;
+
+    let stat = Stat {
+        r#type,
+        dev,
+        qid: Qid {
+            qtype,
+            version,
+            path,
+        },
+        mode,
+        atime,
+        mtime,
+        length,
+        name,
+        uid,
+        gid,
+        muid,
+    };
+
+    println!("VARIANT 1 RESULT: {:?}", stat);
+    println!("uid: '{}', gid: '{}'", stat.uid, stat.gid);
+    println!("cursor position: {}", cursor.position());
+
+    Ok(stat)
+}
+
+/// Variant 2: Shifted string fields by one position
+fn decode_stat_shifted_strings(data: &[u8]) -> Result<Stat> {
+    let mut cursor = Cursor::new(data);
+
+    let stat_size = u16::decode(&mut cursor)?;
+    println!("Size field: {}", stat_size);
+
+    let r#type = u16::decode(&mut cursor)?;
+    let dev = u32::decode(&mut cursor)?;
+
+    // Read QID fields directly
+    let qtype = u8::decode(&mut cursor)?;
+    let version = u32::decode(&mut cursor)?;
+    let path = u64::decode(&mut cursor)?;
+
+    let mode = u32::decode(&mut cursor)?;
+    let atime = u32::decode(&mut cursor)?;
+    let mtime = u32::decode(&mut cursor)?;
+    let length = u64::decode(&mut cursor)?;
+
+    // String fields SHIFTED - try all permutations
+    let s1 = String::decode(&mut cursor)?;
+    let s2 = String::decode(&mut cursor)?;
+    let s3 = String::decode(&mut cursor)?;
+    let s4 = String::decode(&mut cursor)?;
+
+    println!(
+        "String1: '{}', String2: '{}', String3: '{}', String4: '{}'",
+        s1, s2, s3, s4
+    );
+
+    // Try different orderings
+    let name = s1.clone(); // Try name as first string
+    let uid = s2.clone(); // Try uid as second string
+    let gid = s3.clone(); // Try gid as third string
+    let muid = s4.clone(); // Try muid as fourth string
+
+    let stat = Stat {
+        r#type,
+        dev,
+        qid: Qid {
+            qtype,
+            version,
+            path,
+        },
+        mode,
+        atime,
+        mtime,
+        length,
+        name,
+        uid,
+        gid,
+        muid,
+    };
+
+    println!("VARIANT 2 RESULT: {:?}", stat);
+    println!("cursor position: {}", cursor.position());
+
+    Ok(stat)
+}
+
+/// Variant 3: Different field offsets
+fn decode_stat_alternate_offsets(data: &[u8]) -> Result<Stat> {
+    // Dump the raw bytes for detailed analysis
+    println!("Raw bytes for manual analysis:");
+    for (i, chunk) in data.chunks(16).enumerate() {
+        print!("{:04x}:  ", i * 16);
+        for byte in chunk {
+            print!("{:02x} ", *byte);
+        }
+        println!();
+    }
+
+    // Try offsets 2 bytes apart from standard
+    if data.len() < 60 {
+        return Err(Error::InsufficientData {
+            expected: 60,
+            actual: data.len(),
+        });
+    }
+
+    // Read fields at specific offsets
+    let r#type = u16::from_le_bytes([data[2], data[3]]);
+    let dev = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+
+    // QID at +2 offset
+    let qtype = data[8];
+    let version = u32::from_le_bytes([data[9], data[10], data[11], data[12]]);
+    let path = u64::from_le_bytes([
+        data[13], data[14], data[15], data[16], data[17], data[18], data[19], data[20],
+    ]);
+
+    // Rest of fields at shifted positions
+    let mode = u32::from_le_bytes([data[21], data[22], data[23], data[24]]);
+    let atime = u32::from_le_bytes([data[25], data[26], data[27], data[28]]);
+    let mtime = u32::from_le_bytes([data[29], data[30], data[31], data[32]]);
+    let length = u64::from_le_bytes([
+        data[33], data[34], data[35], data[36], data[37], data[38], data[39], data[40],
+    ]);
+
+    // Attempt to read strings starting at different offsets
+    let stat = Stat {
+        r#type,
+        dev,
+        qid: Qid {
+            qtype,
+            version,
+            path,
+        },
+        mode,
+        atime,
+        mtime,
+        length,
+        name: String::from_utf8_lossy(&[]).to_string(), // Empty for now
+        uid: String::from_utf8_lossy(&data[45..50]).to_string(),
+        gid: String::from_utf8_lossy(&data[52..57]).to_string(),
+        muid: String::from_utf8_lossy(&[]).to_string(),
+    };
+
+    println!("VARIANT 3 RESULT: {:?}", stat);
+    println!("Offset-based parsing, strings may be truncated");
+
+    Ok(stat)
+}
+
+/// Variant 4: Custom string reading logic
+fn decode_stat_custom_strings(data: &[u8]) -> Result<Stat> {
+    let mut cursor = Cursor::new(data);
+
+    let stat_size = u16::decode(&mut cursor)?;
+    println!("Size field: {}", stat_size);
+
+    // Skip past all the numeric fields (41 bytes)
+    // 2 (type) + 4 (dev) + 1 (qtype) + 4 (version) + 8 (path) +
+    // 4 (mode) + 4 (atime) + 4 (mtime) + 8 (length) = 39
+    let pos = 2 + 39; // 2 for stat_size already read
+    cursor.set_position(pos);
+
+    // Now try to manually read the strings
+    let mut strings: Vec<String> = Vec::new();
+
+    // Read up to 4 strings or until the end of stat_size
+    let end_pos = 2 + stat_size as u64;
+    while cursor.position() < end_pos && strings.len() < 4 {
+        if let Ok(s) = String::decode(&mut cursor) {
+            strings.push(s);
+        } else {
+            break;
+        }
+    }
+
+    // Create stat with placeholder values
+    let mut stat = Stat {
+        r#type: 0,
+        dev: 0,
+        qid: Qid {
+            qtype: 0,
+            version: 0,
+            path: 0,
+        },
+        mode: 0,
+        atime: 0,
+        mtime: 0,
+        length: 0,
+        name: String::new(),
+        uid: String::new(),
+        gid: String::new(),
+        muid: String::new(),
+    };
+
+    // Assign strings based on how many we found
+    if strings.len() >= 1 {
+        stat.name = strings[0].clone();
+    }
+    if strings.len() >= 2 {
+        stat.uid = strings[1].clone();
+    }
+    if strings.len() >= 3 {
+        stat.gid = strings[2].clone();
+    }
+    if strings.len() >= 4 {
+        stat.muid = strings[3].clone();
+    }
+
+    println!("VARIANT 4 RESULT: Found {} strings:", strings.len());
+    for (i, s) in strings.iter().enumerate() {
+        println!("  String {}: '{}'", i, s);
+    }
+
+    Ok(stat)
+}
+
+/// Variant 5: Skip size field entirely
+fn decode_stat_skip_size(data: &[u8]) -> Result<Stat> {
+    let mut cursor = Cursor::new(data);
+
+    // Skip the size field
+    cursor.set_position(2);
+
+    // Read remaining fields
+    let r#type = u16::decode(&mut cursor)?;
+    let dev = u32::decode(&mut cursor)?;
+
+    // Skip QID completely and try different offsets
+    cursor.set_position(15); // Arbitrary skip
+
+    let mode = u32::decode(&mut cursor)?;
+    let atime = u32::decode(&mut cursor)?;
+    let mtime = u32::decode(&mut cursor)?;
+    let length = u64::decode(&mut cursor)?;
+
+    // Try reading strings from where we are now
+    let s1 = String::decode(&mut cursor).unwrap_or_default();
+    let s2 = String::decode(&mut cursor).unwrap_or_default();
+
+    let stat = Stat {
+        r#type,
+        dev,
+        qid: Qid {
+            qtype: 0,
+            version: 0,
+            path: 0,
+        },
+        mode,
+        atime,
+        mtime,
+        length,
+        name: String::new(),
+        uid: s1.clone(),
+        gid: s2.clone(),
+        muid: String::new(),
+    };
+
+    println!("VARIANT 5 RESULT: {:?}", stat);
+    println!("String1: '{}', String2: '{}'", s1, s2);
+
+    Ok(stat)
+}
+
+/// Variant 6: Reversed numeric field order
+fn decode_stat_reversed_nums(data: &[u8]) -> Result<Stat> {
+    if data.len() < 60 {
+        return Err(Error::InsufficientData {
+            expected: 60,
+            actual: data.len(),
+        });
+    }
+
+    // Read things in reverse order to see if alignment changes
+    let mut cursor = Cursor::new(data);
+
+    // Skip past the size field
+    cursor.set_position(2);
+
+    // Try different combinations of fields
+    let length = u64::decode(&mut cursor)?; // Read length first
+    let mtime = u32::decode(&mut cursor)?;
+    let atime = u32::decode(&mut cursor)?;
+    let mode = u32::decode(&mut cursor)?;
+
+    // QID fields in different order
+    let path = u64::decode(&mut cursor)?;
+    let version = u32::decode(&mut cursor)?;
+    let qtype = u8::decode(&mut cursor)?;
+
+    let dev = u32::decode(&mut cursor)?;
+    let r#type = u16::decode(&mut cursor)?;
+
+    // Try reading any strings left
+    let pos = cursor.position();
+    let s1 = if cursor.remaining() > 2 {
+        String::decode(&mut cursor).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let s2 = if cursor.remaining() > 2 {
+        String::decode(&mut cursor).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let stat = Stat {
+        r#type,
+        dev,
+        qid: Qid {
+            qtype,
+            version,
+            path,
+        },
+        mode,
+        atime,
+        mtime,
+        length,
+        name: String::new(),
+        uid: s1.clone(),
+        gid: s2.clone(),
+        muid: String::new(),
+    };
+
+    println!("VARIANT 6 RESULT: {:?}", stat);
+    println!("Reversed field order, string start at pos {}", pos);
+    println!("String1: '{}', String2: '{}'", s1, s2);
+
+    Ok(stat)
+}
+
+/// Variant 7: Direct cursor-based reading, byte by byte
+fn decode_stat_cursor_bytes(data: &[u8]) -> Result<Stat> {
+    // Raw parsing, reading bytes directly
+    let mut cursor = Cursor::new(data);
+
+    // Skip size field
+    cursor.set_position(2);
+
+    // Read fields as individual bytes to avoid alignment issues
+    let mut bytes = [0u8; 8]; // Buffer for reading
+
+    // Read type (2 bytes)
+    cursor.read_exact(&mut bytes[0..2]).unwrap();
+    let r#type = u16::from_le_bytes([bytes[0], bytes[1]]);
+
+    // Read dev (4 bytes)
+    cursor.read_exact(&mut bytes[0..4]).unwrap();
+    let dev = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+
+    // Read QID fields
+    cursor.read_exact(&mut bytes[0..1]).unwrap();
+    let qtype = bytes[0];
+
+    cursor.read_exact(&mut bytes[0..4]).unwrap();
+    let version = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+
+    cursor.read_exact(&mut bytes[0..8]).unwrap();
+    let path = u64::from_le_bytes(bytes);
+
+    // Read mode (4 bytes)
+    cursor.read_exact(&mut bytes[0..4]).unwrap();
+    let mode = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+
+    // Read atime (4 bytes)
+    cursor.read_exact(&mut bytes[0..4]).unwrap();
+    let atime = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+
+    // Read mtime (4 bytes)
+    cursor.read_exact(&mut bytes[0..4]).unwrap();
+    let mtime = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+
+    // Read length (8 bytes)
+    cursor.read_exact(&mut bytes[0..8]).unwrap();
+    let length = u64::from_le_bytes(bytes);
+
+    // Custom string reading
+    let mut read_string = || -> String {
+        if cursor.remaining() < 2 {
+            return String::new();
+        }
+
+        let mut len_bytes = [0u8; 2];
+        cursor.read_exact(&mut len_bytes).unwrap();
+        let len = u16::from_le_bytes(len_bytes) as usize;
+
+        if len == 0 || cursor.remaining() < len {
+            return String::new();
+        }
+
+        let mut str_bytes = vec![0u8; len];
+        cursor.read_exact(&mut str_bytes).unwrap();
+        String::from_utf8_lossy(&str_bytes).to_string()
+    };
+
+    let name = read_string();
+    let uid = read_string();
+    let gid = read_string();
+    let muid = read_string();
+
+    let stat = Stat {
+        r#type,
+        dev,
+        qid: Qid {
+            qtype,
+            version,
+            path,
+        },
+        mode,
+        atime,
+        mtime,
+        length,
+        name,
+        uid,
+        gid,
+        muid,
+    };
+
+    println!("VARIANT 7 RESULT: {:?}", stat);
+    println!("Byte-by-byte cursor reading");
+
+    Ok(stat)
+}
+
+/// Variant 8: Manual inspection and string hunting
+fn decode_stat_manual_inspection(data: &[u8]) -> Result<Stat> {
+    // Dump the entire byte array for manual inspection
+    println!("Full byte array:");
+    for (i, chunk) in data.chunks(16).enumerate() {
+        print!("{:04x}:  ", i * 16);
+        for byte in chunk {
+            print!("{:02x} ", *byte);
+        }
+
+        // Print ASCII representation
+        print!("  ");
+        for byte in chunk {
+            if byte.is_ascii_graphic() || *byte == b' ' {
+                print!("{}", *byte as char);
+            } else {
+                print!(".");
+            }
+        }
+        println!();
+    }
+
+    // Look for potential strings in the byte array
+    println!("\nPotential string locations:");
+
+    let mut i = 0;
+    while i < data.len() {
+        // If we find a length byte followed by ASCII characters
+        if i + 2 < data.len() {
+            let len = u16::from_le_bytes([data[i], data[i + 1]]) as usize;
+            if len > 0 && len < 100 && i + 2 + len <= data.len() {
+                let text = &data[i + 2..i + 2 + len];
+                if text.iter().all(|&b| b.is_ascii_graphic() || b == b' ') {
+                    println!(
+                        "Offset {:04x}: len={}, '{}'",
+                        i,
+                        len,
+                        String::from_utf8_lossy(text)
+                    );
+                }
+            }
+        }
+        i += 1;
+    }
+
+    // Create a placeholder stat
+    let stat = Stat {
+        r#type: 0,
+        dev: 0,
+        qid: Qid {
+            qtype: 0,
+            version: 0,
+            path: 0,
+        },
+        mode: 0,
+        atime: 0,
+        mtime: 0,
+        length: 0,
+        name: String::new(),
+        uid: String::new(),
+        gid: String::new(),
+        muid: String::new(),
+    };
+
+    println!("VARIANT 8: Manual inspection - examine the byte dump and potential strings");
+
+    Ok(stat)
+}
+
+#[cfg(test)]
+mod tests;

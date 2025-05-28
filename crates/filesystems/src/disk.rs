@@ -5,9 +5,9 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use stowage_proto::{
-    Message, ParsedStat, Qid, QidType, Rattach, Rclunk, Rcreate, Rerror, Rflush, Ropen, Rread,
-    Rremove, Rstat, Rwalk, Rwrite, Rwstat, Tattach, Tclunk, Tcreate, Tflush, Topen, Tread, Tremove,
-    Tstat, Twalk, Twrite, Twstat,
+    Message, Qid, QidType, Rattach, Rclunk, Rcreate, Rerror, Rflush, Ropen, Rread, Rremove, Rstat,
+    Rwalk, Rwrite, Rwstat, Stat, Tattach, Tclunk, Tcreate, Tflush, Topen, Tread, Tremove, Tstat,
+    Twalk, Twrite, Twstat,
 };
 use stowage_service::MessageHandler;
 
@@ -553,12 +553,7 @@ impl MessageHandler for Handler {
         match fs::metadata(&path) {
             Ok(metadata) => {
                 let stat = stat_from_metadata(&metadata, &path);
-                let Ok(bytes) = stat.to_bytes() else {
-                    return Message::Rerror(Rerror {
-                        ename: "failed to encode stat".to_string(),
-                    });
-                };
-                Message::Rstat(Rstat { stat: bytes })
+                Message::Rstat(Rstat { stat })
             }
             Err(e) => Message::Rerror(Rerror {
                 ename: format!("Stat error: {e}"),
@@ -568,11 +563,7 @@ impl MessageHandler for Handler {
 
     async fn wstat(&self, message: &Twstat) -> Message {
         let fid = message.fid;
-        let Ok(stat) = ParsedStat::parse_from_bytes(message.stat.as_ref()) else {
-            return Message::Rerror(Rerror {
-                ename: "failed to parse stat".to_string(),
-            });
-        };
+        let stat = &message.stat;
 
         // get the path
         let Ok(path) = self.path_for_fid(fid) else {
@@ -652,10 +643,10 @@ fn create_qid_from_metadata(metadata: &fs::Metadata) -> Qid {
     }
 }
 
-fn stat_from_metadata(metadata: &fs::Metadata, path: &Path) -> ParsedStat {
+fn stat_from_metadata(metadata: &fs::Metadata, path: &Path) -> Stat {
     let qid = create_qid_from_metadata(metadata);
 
-    ParsedStat {
+    Stat {
         r#type: u16::from(qid.qtype),
         dev: 0, // not needed for this implementation
         qid,
