@@ -2,20 +2,15 @@ use crate::{
     commands::{Commands, ServerCommands},
     error::Result,
 };
-use bytes::{Buf, BytesMut};
 use clap::Parser;
 use commands::DebugCommands;
 use error::Error;
 use futures::{SinkExt, StreamExt};
-use std::{
-    io::{Cursor, Read},
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{io::Cursor, path::PathBuf, sync::Arc};
 use stowage_filesystems::disk::Handler;
 use stowage_proto::{
-    consts::P9_NOFID, Message, MessageCodec, Protocol, Stat, TaggedMessage, Tattach, Tauth, Tclunk,
-    Tcreate, Topen, Tread, Tstat, Tversion, Twalk, Twrite, Twstat,
+    consts::P9_NOFID, Decodable, Message, MessageCodec, Stat, TaggedMessage, Tattach, Tauth,
+    Tclunk, Tcreate, Topen, Tread, Tstat, Tversion, Twalk, Twrite, Twstat,
 };
 use stowage_service::Plan9;
 use tokio::net::{TcpListener, TcpStream};
@@ -34,7 +29,7 @@ async fn main() -> Result<()> {
     let args = commands::Args::parse();
     match args.command {
         Commands::Debug(debug) => match debug.command {
-            DebugCommands::DumpMessages { path } => dump_messages_command(path).await,
+            DebugCommands::DumpMessages { path } => dump_messages_command(&path),
         },
         Commands::Fs(fs) => {
             let cmd = fs.command;
@@ -253,10 +248,10 @@ async fn cleanup_fid(conn: &mut Connection, tag: u16, fid: u32) -> Result<()> {
         match response.message {
             Message::Rclunk(_) => {}
             Message::Rerror(err) => {
-                eprintln!("Warning: Failed to clunk fid {}: {}", fid, err.ename);
+                eprintln!("warning: Failed to clunk fid {}: {}", fid, err.ename);
             }
             _ => {
-                eprintln!("Warning: Unexpected response to Tclunk for fid {fid}");
+                eprintln!("warning: Unexpected response to Tclunk for fid {fid}");
             }
         }
     }
@@ -281,7 +276,7 @@ async fn ls_command(
         if !components.is_empty() {
             let walk_success = walk_to_path(conn, tag, root_fid, root_fid + 1, &path).await?;
             if !walk_success {
-                return Err(Error::Other(format!("Path not found: {path}")));
+                return Err(Error::Other(format!("path not found: {path}")));
             }
             root_fid += 1;
         }
@@ -305,11 +300,11 @@ async fn ls_command(
         Message::Ropen(_) => {}
         Message::Rerror(err) => {
             return Err(Error::Other(format!(
-                "Failed to open directory: {}",
+                "failed to open directory: {}",
                 err.ename
             )));
         }
-        _ => return Err(Error::Other("Unexpected response to Topen".into())),
+        _ => return Err(Error::Other("unexpected response to Topen".into())),
     }
 
     read_directory_contents(conn, tag, root_fid, msize).await?;
@@ -501,10 +496,10 @@ async fn create_directory(
                 Ok(())
             }
             Message::Rerror(err) => Err(Error::Other(format!(
-                "Failed to create directory '{}': {}",
+                "failed to create directory '{}': {}",
                 components[index], err.ename
             ))),
-            _ => Err(Error::Other("Unexpected response to Tcreate".into())),
+            _ => Err(Error::Other("unexpected response to Tcreate".into())),
         }
     } else {
         // walk to parent and create there
@@ -519,7 +514,7 @@ async fn create_directory(
         .await?;
 
         if !walk_success {
-            return Err(Error::Other("Failed to walk to parent directory".into()));
+            return Err(Error::Other("failed to walk to parent directory".into()));
         }
 
         let create_msg = Tcreate {
@@ -546,13 +541,13 @@ async fn create_directory(
             Message::Rerror(err) => {
                 cleanup_fid(conn, tag, parent_fid).await?;
                 Err(Error::Other(format!(
-                    "Failed to create directory '{}': {}",
+                    "failed to create directory '{}': {}",
                     components[index], err.ename
                 )))
             }
             _ => {
                 cleanup_fid(conn, tag, parent_fid).await?;
-                Err(Error::Other("Unexpected response to Tcreate".into()))
+                Err(Error::Other("unexpected response to Tcreate".into()))
             }
         }
     }
@@ -563,7 +558,7 @@ async fn touch_command(conn: &mut Connection, tag: u16, path: String) -> Result<
 
     let components = parse_path_components(&path);
     if components.is_empty() {
-        return Err(Error::Other("Cannot touch root directory".into()));
+        return Err(Error::Other("cannot touch root directory".into()));
     }
 
     let root_fid = 2;
@@ -630,29 +625,29 @@ async fn handle_existing_file_touch(
                 if let Ok(response) = receive_message(conn).await {
                     match response.message {
                         Message::Rwstat(_) => {
-                            println!("Updated access and modification times for: {path}");
+                            println!("updated access and modification times for: {path}");
                         }
                         Message::Rerror(err) => {
-                            eprintln!("Warning: Could not update file times: {}", err.ename);
-                            println!("File exists: {path}");
+                            eprintln!("warning: Could not update file times: {}", err.ename);
+                            println!("file exists: {path}");
                         }
                         _ => {
-                            eprintln!("Warning: Unexpected response to Twstat");
-                            println!("File exists: {path}");
+                            eprintln!("warning: Unexpected response to Twstat");
+                            println!("file exists: {path}");
                         }
                     }
                 }
             } else {
-                println!("File exists: {path}");
+                println!("file exists: {path}");
             }
         }
         Message::Rerror(err) => {
             return Err(Error::Other(format!(
-                "Failed to get file stat: {}",
+                "failed to get file stat: {}",
                 err.ename
             )));
         }
-        _ => return Err(Error::Other("Unexpected response to Tstat".into())),
+        _ => return Err(Error::Other("unexpected response to Tstat".into())),
     }
 
     cleanup_fid(conn, tag, file_fid).await?;
@@ -696,14 +691,14 @@ async fn create_new_file(
         match response.message {
             Message::Rcreate(_) => {
                 cleanup_fid(conn, tag, root_fid).await?;
-                println!("File created: {path}");
+                println!("file created: {path}");
                 Ok(())
             }
             Message::Rerror(err) => Err(Error::Other(format!(
-                "Failed to create file '{}': {}",
+                "failed to create file '{}': {}",
                 path, err.ename
             ))),
-            _ => Err(Error::Other("Unexpected response to Tcreate".into())),
+            _ => Err(Error::Other("unexpected response to Tcreate".into())),
         }
     } else {
         // walk to parent directory first
@@ -720,7 +715,7 @@ async fn create_new_file(
         if !walk_success {
             cleanup_fid(conn, tag, parent_fid).await?;
             return Err(Error::Other(format!(
-                "Parent directory not found for: {path}"
+                "parent directory not found for: {path}"
             )));
         }
 
@@ -743,19 +738,19 @@ async fn create_new_file(
         match response.message {
             Message::Rcreate(_) => {
                 cleanup_fid(conn, tag, parent_fid).await?;
-                println!("File created: {path}");
+                println!("file created: {path}");
                 Ok(())
             }
             Message::Rerror(err) => {
                 cleanup_fid(conn, tag, parent_fid).await?;
                 Err(Error::Other(format!(
-                    "Failed to create file '{path}': {}",
+                    "failed to create file '{path}': {}",
                     err.ename
                 )))
             }
             _ => {
                 cleanup_fid(conn, tag, parent_fid).await?;
-                Err(Error::Other("Unexpected response to Tcreate".into()))
+                Err(Error::Other("unexpected response to Tcreate".into()))
             }
         }
     }
@@ -785,7 +780,7 @@ async fn write_command(
     let components = parse_path_components(&path);
 
     if components.is_empty() {
-        return Err(Error::Other("Cannot write to root directory".into()));
+        return Err(Error::Other("cannot write to root directory".into()));
     }
 
     // try to walk to the file
@@ -840,10 +835,10 @@ async fn open_file_for_writing(
             Ok((file_fid, offset))
         }
         Message::Rerror(err) => Err(Error::Other(format!(
-            "Failed to open file for writing: {}",
+            "failed to open file for writing: {}",
             err.ename
         ))),
-        _ => Err(Error::Other("Unexpected response to Topen".into())),
+        _ => Err(Error::Other("unexpected response to Topen".into())),
     }
 }
 
@@ -860,16 +855,16 @@ async fn get_file_size(conn: &mut Connection, tag: u16, fid: u32) -> Result<u64>
 
     let response = receive_message(conn).await?;
     match response.message {
-        Message::Rstat(rstat) => get_file_length_from_stat(&rstat.stat),
+        Message::Rstat(rstat) => Ok(rstat.stat.length),
         Message::Rerror(err) => {
             eprintln!(
-                "Warning: Could not stat file: {}, starting at offset 0",
+                "warning: Could not stat file: {}, starting at offset 0",
                 err.ename
             );
             Ok(0)
         }
         _ => {
-            eprintln!("Warning: Unexpected response to Tstat, starting at offset 0");
+            eprintln!("warning: Unexpected response to Tstat, starting at offset 0");
             Ok(0)
         }
     }
@@ -912,10 +907,10 @@ async fn create_file_for_writing(
         match response.message {
             Message::Rcreate(_) => Ok((root_fid, 0)),
             Message::Rerror(err) => Err(Error::Other(format!(
-                "Failed to create file '{}': {}",
+                "failed to create file '{}': {}",
                 path, err.ename
             ))),
-            _ => Err(Error::Other("Unexpected response to Tcreate".into())),
+            _ => Err(Error::Other("unexpected response to Tcreate".into())),
         }
     } else {
         // walk to parent directory first
@@ -932,7 +927,7 @@ async fn create_file_for_writing(
         if !walk_success {
             cleanup_fid(conn, tag, parent_fid).await?;
             return Err(Error::Other(format!(
-                "Parent directory not found for: {path}",
+                "parent directory not found for: {path}",
             )));
         }
 
@@ -955,10 +950,10 @@ async fn create_file_for_writing(
         match response.message {
             Message::Rcreate(_) => Ok((parent_fid, 0)),
             Message::Rerror(err) => Err(Error::Other(format!(
-                "Failed to create file '{}': {}",
+                "failed to create file '{}': {}",
                 path, err.ename
             ))),
-            _ => Err(Error::Other("Unexpected response to Tcreate".into())),
+            _ => Err(Error::Other("unexpected response to Tcreate".into())),
         }
     }
 }
@@ -1003,18 +998,18 @@ async fn write_data_to_file(
         match response.message {
             Message::Rwrite(rwrite) => {
                 if rwrite.count == 0 {
-                    return Err(Error::Other("Write failed: server wrote 0 bytes".into()));
+                    return Err(Error::Other("write failed: server wrote 0 bytes".into()));
                 }
                 bytes_written += rwrite.count as usize;
                 offset += u64::from(rwrite.count);
             }
             Message::Rerror(err) => {
                 return Err(Error::Other(format!(
-                    "Failed to write to file: {}",
+                    "failed to write to file: {}",
                     err.ename
                 )));
             }
-            _ => return Err(Error::Other("Unexpected response to Twrite".into())),
+            _ => return Err(Error::Other("unexpected response to Twrite".into())),
         }
     }
 
@@ -1033,7 +1028,7 @@ async fn cat_command(conn: &mut Connection, tag: u16, path: String, msize: u32) 
 
     let walk_success = walk_to_path(conn, tag, root_fid, root_fid + 1, &path).await?;
     if !walk_success {
-        return Err(Error::Other(format!("File not found: {path}")));
+        return Err(Error::Other(format!("file not found: {path}")));
     }
     root_fid += 1;
 
@@ -1059,9 +1054,9 @@ async fn cat_command(conn: &mut Connection, tag: u16, path: String, msize: u32) 
             }
         }
         Message::Rerror(err) => {
-            return Err(Error::Other(format!("Failed to open file: {}", err.ename)));
+            return Err(Error::Other(format!("failed to open file: {}", err.ename)));
         }
-        _ => return Err(Error::Other("Unexpected response to Topen".into())),
+        _ => return Err(Error::Other("unexpected response to Topen".into())),
     }
 
     read_and_output_file(conn, tag, root_fid, msize).await?;
@@ -1117,37 +1112,31 @@ fn create_updated_stat(_current_stat: &Stat, _atime: u32, _mtime: u32) -> Result
     unimplemented!("stat writing");
 }
 
-fn get_file_length_from_stat(stat_bytes: &Stat) -> Result<u64> {
-    todo!()
-}
-
-async fn dump_messages_command(path: PathBuf) -> Result<()> {
+fn dump_messages_command(path: &PathBuf) -> Result<()> {
     use bytes::BytesMut;
     use std::fs;
 
     info!("reading 9p messages from: {}", path.display());
 
-    // Read the binary file
-    let data = fs::read(&path)
-        .map_err(|e| Error::Other(format!("Failed to read file {}: {}", path.display(), e)))?;
+    let data = fs::read(path)
+        .map_err(|e| Error::Other(format!("failed to read file {}: {}", path.display(), e)))?;
 
     if data.is_empty() {
-        println!("File is empty");
+        println!("file is empty");
         return Ok(());
     }
 
-    // Create decoder and buffer
+    // create decoder and buffer
     let mut codec = MessageCodec::new();
     let mut buf = BytesMut::from(&data[..]);
     let mut message_count = 0;
 
-    // Decode messages one by one
+    // decode messages one by one
     while !buf.is_empty() {
         match codec.decode(&mut buf) {
             Ok(Some(message)) => {
                 message_count += 1;
 
-                // Determine message direction
                 let direction = match message.message_type().to_u8() {
                     100 | 102 | 104 | 108 | 110 | 112 | 114 | 116 | 118 | 120 | 122 | 124 | 126 => {
                         "<-"
@@ -1155,26 +1144,26 @@ async fn dump_messages_command(path: PathBuf) -> Result<()> {
                     _ => "->",
                 };
 
-                println!("{} {}", direction, message);
+                println!("{direction} {message}");
                 if let Message::Rstat(rstat) = &message.message {
                     println!("{:?}", rstat.stat);
                 }
             }
             Ok(None) => {
-                // No complete message available
+                // no complete message available
                 if !buf.is_empty() {
-                    println!("Incomplete message data: {} bytes", buf.len());
+                    println!("incomplete message data: {} bytes", buf.len());
                 }
                 break;
             }
             Err(e) => {
-                println!("Error decoding message: {}", e);
-                println!("Remaining buffer: {} bytes", buf.len());
+                println!("error decoding message: {e}");
+                println!("remaining buffer: {} bytes", buf.len());
                 break;
             }
         }
     }
 
-    println!("\nTotal messages: {}", message_count);
+    println!("\ntotal messages: {message_count}");
     Ok(())
 }

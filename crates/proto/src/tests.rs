@@ -8,158 +8,6 @@ const DATA_COMPREHENSIVE_CLIENT: &[u8] = include_bytes!("./testdata/complete-cli
 const DATA_COMPREHENSIVE_SERVER: &[u8] = include_bytes!("./testdata/complete-server.9p");
 
 #[test]
-fn test_round_trip_all_messages() {
-    let stat = Stat {
-        r#type: 0,
-        dev: 0,
-        qid: Qid {
-            qtype: 0x00,
-            version: 0,
-            path: 0x789,
-        },
-        mode: 0o644,
-        atime: 1_000_000,
-        mtime: 1_000_001,
-        length: 1024,
-        name: "test.txt".to_string(),
-        uid: "user".to_string(),
-        gid: "group".to_string(),
-        muid: "user".to_string(),
-    };
-
-    let test_cases = vec![
-        TaggedMessage::new(
-            1,
-            Message::Tversion(Tversion {
-                msize: 8192,
-                version: "9P2000".to_string(),
-            }),
-        ),
-        TaggedMessage::new(
-            2,
-            Message::Rversion(Rversion {
-                msize: 8192,
-                version: "9P2000".to_string(),
-            }),
-        ),
-        TaggedMessage::new(
-            3,
-            Message::Tauth(Tauth {
-                afid: 42,
-                uname: "user".to_string(),
-                aname: String::new(),
-            }),
-        ),
-        TaggedMessage::new(
-            4,
-            Message::Rauth(Rauth {
-                aqid: Qid {
-                    qtype: 0x80,
-                    version: 1,
-                    path: 0x123,
-                },
-            }),
-        ),
-        TaggedMessage::new(
-            5,
-            Message::Twalk(Twalk {
-                fid: 1,
-                newfid: 2,
-                wnames: vec!["dir1".to_string(), "file.txt".to_string()],
-            }),
-        ),
-        TaggedMessage::new(
-            6,
-            Message::Rwalk(Rwalk {
-                wqids: vec![
-                    Qid {
-                        qtype: 0x80,
-                        version: 1,
-                        path: 0x123,
-                    },
-                    Qid {
-                        qtype: 0x00,
-                        version: 2,
-                        path: 0x456,
-                    },
-                ],
-            }),
-        ),
-        TaggedMessage::new(7, Message::Rstat(Rstat { stat })),
-    ];
-
-    for original in test_cases {
-        let mut buf = BytesMut::new();
-        original.encode(&mut buf).unwrap();
-
-        let mut cursor = Cursor::new(buf.as_ref());
-        let decoded = TaggedMessage::decode(&mut cursor).unwrap();
-
-        assert_eq!(original.tag, decoded.tag);
-        assert_eq!(original.message_type(), decoded.message_type());
-
-        // More detailed comparison would require implementing PartialEq for all message types
-        println!("✓ Round trip test passed for {:?}", original.message_type());
-    }
-}
-
-#[test]
-fn test_rstat_with_size_prefix() -> Result<()> {
-    println!("=== TESTING RSTAT WITH SIZE PREFIX ===");
-
-    // Create the expected stat based on the log
-    let expected_stat = Stat {
-        r#type: 58, // From the actual parsing
-        dev: 0,
-        qid: Qid {
-            qtype: 0x80, // 'd' for directory
-            version: 1_747_714_478,
-            path: 0x1d_e955,
-        },
-        mode: 0x8000_01ed, // From actual parsing but need to verify
-        atime: 1_747_800_895,
-        mtime: 1_747_714_478,
-        length: 0,
-        name: String::new(),
-        uid: "justin".to_string(),
-        gid: "users".to_string(),
-        muid: String::new(),
-    };
-
-    let rstat = Rstat {
-        stat: expected_stat,
-    };
-
-    // Encode it
-    let mut buf = BytesMut::new();
-    rstat.encode(&mut buf)?;
-
-    println!("Encoded Rstat ({} bytes): {}", buf.len(), hex::encode(&buf));
-
-    // Compare with actual bytes (without message header)
-    let actual_rstat_bytes = hex::decode("3c003a0000000000000080ae012c6855e91d0000000000ed0100803f532d68ae012c680000000000000000000006006a757374696e050075736572730000").unwrap();
-    println!(
-        "Actual bytes  ({} bytes): {}",
-        actual_rstat_bytes.len(),
-        hex::encode(&actual_rstat_bytes)
-    );
-
-    // They should match now!
-    if buf.as_ref() == actual_rstat_bytes {
-        println!("✓ Perfect match!");
-    } else {
-        println!("Still a mismatch - let me analyze the actual values...");
-
-        // let's decode the actual bytes to see what the real values should be
-        let mut cursor = Cursor::new(&actual_rstat_bytes[..]);
-        let decoded_rstat = Rstat::decode(&mut cursor)?;
-        println!("Decoded from actual bytes: {decoded_rstat:?}");
-    }
-
-    Ok(())
-}
-
-#[test]
 fn test_codec_integration() {
     let mut codec = MessageCodec::new();
     let original = TaggedMessage::new(
@@ -240,205 +88,6 @@ fn test_against_real_server_data() {
     }
 
     println!("Successfully decoded {message_count} server messages");
-}
-
-#[test]
-fn test_individual_message_round_trips() -> Result<()> {
-    let test_cases = vec![
-        // Test specific values from the log
-        TaggedMessage::new(
-            65535,
-            Message::Tversion(Tversion {
-                msize: 131_096,
-                version: "9P2000".to_string(),
-            }),
-        ),
-        TaggedMessage::new(
-            65535,
-            Message::Rversion(Rversion {
-                msize: 8216,
-                version: "9P2000".to_string(),
-            }),
-        ),
-        TaggedMessage::new(
-            0,
-            Message::Tattach(Tattach {
-                fid: 0,
-                afid: 0xFFFF_FFFF, // -1 as u32
-                uname: "justin".to_string(),
-                aname: String::new(),
-            }),
-        ),
-        TaggedMessage::new(
-            0,
-            Message::Rattach(Rattach {
-                qid: Qid::from_log_format(0x1de_955, 1_747_714_478, 'd'),
-            }),
-        ),
-        TaggedMessage::new(
-            0,
-            Message::Twalk(Twalk {
-                fid: 0,
-                newfid: 1,
-                wnames: vec![], // Empty walk
-            }),
-        ),
-        TaggedMessage::new(
-            0,
-            Message::Rwalk(Rwalk {
-                wqids: vec![], // Empty result
-            }),
-        ),
-        TaggedMessage::new(
-            0,
-            Message::Tread(Tread {
-                fid: 1,
-                offset: 0,
-                count: 8192,
-            }),
-        ),
-        TaggedMessage::new(
-            0,
-            Message::Rread(Rread {
-                data: Bytes::new(), // Empty data for second read
-            }),
-        ),
-    ];
-
-    for (i, original) in test_cases.iter().enumerate() {
-        println!(
-            "Testing round trip {}: {:?} tag {}",
-            i + 1,
-            original.message_type(),
-            original.tag
-        );
-
-        let mut buf = BytesMut::new();
-        original.encode(&mut buf)?;
-
-        let mut cursor = Cursor::new(buf.as_ref());
-        let decoded = TaggedMessage::decode(&mut cursor)?;
-
-        assert_eq!(original, &decoded, "Round trip test {} failed", i + 1);
-    }
-
-    Ok(())
-}
-
-#[test]
-fn test_afid_negative_one_handling() -> Result<()> {
-    // Test that afid value of -1 is properly handled as 0xFFFFFFFF
-    let tattach = Tattach {
-        fid: 0,
-        afid: 0xFFFF_FFFF, // -1 as u32
-        uname: "justin".to_string(),
-        aname: String::new(),
-    };
-
-    let mut buf = BytesMut::new();
-    tattach.encode(&mut buf)?;
-
-    // Check that afid is encoded as 0xFFFFFFFF in little endian
-    let afid_bytes = &buf[4..8]; // Skip fid (first 4 bytes)
-    assert_eq!(afid_bytes, &[0xFF, 0xFF, 0xFF, 0xFF]);
-
-    let mut cursor = Cursor::new(buf.as_ref());
-    let decoded = Tattach::decode(&mut cursor)?;
-
-    assert_eq!(tattach, decoded);
-    Ok(())
-}
-
-#[test]
-fn test_qid_encoding() -> Result<()> {
-    // Test the specific qid from the log: (00000000001de955 1747714478 d)
-    let qid = Qid::from_log_format(0x1de_955, 1_747_714_478, 'd');
-
-    let mut buf = BytesMut::new();
-    qid.encode(&mut buf)?;
-
-    // Verify the encoding: type[1] version[4] path[8] in little endian
-    assert_eq!(buf.len(), 13);
-    assert_eq!(buf[0], 0x80); // 'd' -> QTDIR
-
-    // version: 1747714478 in little endian
-    let version_bytes = 1_747_714_478_u32.to_le_bytes();
-    assert_eq!(&buf[1..5], &version_bytes);
-
-    // path: 0x1de955 in little endian
-    let path_bytes = 0x1de_955_u64.to_le_bytes();
-    assert_eq!(&buf[5..13], &path_bytes);
-
-    let mut cursor = Cursor::new(buf.as_ref());
-    let decoded = Qid::decode(&mut cursor)?;
-
-    assert_eq!(qid, decoded);
-    Ok(())
-}
-
-#[test]
-fn test_rread_with_real_data() -> Result<()> {
-    println!("=== TESTING RREAD WITH REAL DATA ===");
-
-    // This hex data should be from an actual Rread response in the server data
-    // Let me extract it from the actual server messages instead of hardcoding
-
-    let server_messages = extract_messages_debug(DATA_LS_SERVER)?;
-
-    // Find the first Rread message (should be message 8)
-    if let Some((
-        raw_bytes,
-        TaggedMessage {
-            message: Message::Rread(rread),
-            ..
-        },
-    )) = server_messages
-        .iter()
-        .find(|(_, msg)| matches!(msg.message, Message::Rread(_)))
-    {
-        println!(
-            "Found Rread message with {} bytes of data",
-            rread.data.len()
-        );
-        println!(
-            "Raw message ({} bytes): {}",
-            raw_bytes.len(),
-            hex::encode(raw_bytes)
-        );
-
-        // Test encoding/decoding
-        let mut buf = BytesMut::new();
-        rread.encode(&mut buf)?;
-
-        let mut cursor = Cursor::new(buf.as_ref());
-        let decoded = Rread::decode(&mut cursor)?;
-
-        assert_eq!(rread.data, decoded.data);
-        println!(
-            "✅ Rread encode/decode test passed with {} bytes of data",
-            decoded.data.len()
-        );
-
-        // Test that when we encode this Rread in a full message, it matches the original
-        let mut full_message_buf = BytesMut::new();
-        let tagged_message = TaggedMessage::new(0, Message::Rread(rread.clone()));
-        let mut codec = MessageCodec::new();
-        codec.encode(tagged_message, &mut full_message_buf)?;
-
-        if raw_bytes.as_ref() == full_message_buf.as_ref() {
-            println!("✅ Full message encoding matches perfectly!");
-        } else {
-            println!("❌ Full message mismatch:");
-            println!("Original: {}", hex::encode(raw_bytes));
-            println!("Encoded:  {}", hex::encode(&full_message_buf));
-        }
-    } else {
-        return Err(Error::Protocol(
-            "No Rread message found in server data".into(),
-        ));
-    }
-
-    Ok(())
 }
 
 #[test]
@@ -684,11 +333,15 @@ mod comprehensive_tests {
         assert!(tcreate.name.contains("txt") || tcreate.name.contains("file"));
 
         // Check if perm includes file type bits (0o100000)
-        let has_file_type = tcreate.perm & 0o170000 != 0;
+        let has_file_type = tcreate.perm & 0o170_000 != 0;
         if has_file_type {
             // Full mode with file type
             assert_eq!(tcreate.perm & 0o777, 0o644, "Permission bits should be 644");
-            assert_eq!(tcreate.perm & 0o170000, 0o100000, "Should be regular file");
+            assert_eq!(
+                tcreate.perm & 0o170_000,
+                0o100_000,
+                "Should be regular file"
+            );
         } else {
             // Just permission bits
             assert_eq!(tcreate.perm, 0o644);
@@ -887,8 +540,8 @@ mod encoding_verification_tests {
                 Message::Tcreate(Tcreate {
                     fid: 1,
                     name: "test.txt".to_string(),
-                    perm: 0o100644, // Note: includes file type bits
-                    mode: 1,        // Write-only
+                    perm: 0o100_644, // note: includes file type bits
+                    mode: 1,         // write-only
                 }),
             ),
             // >>> Twrite tag 4 fid 1 offset 0 count 17 data (17 bytes)
@@ -1171,7 +824,7 @@ fn expected_client_messages() -> Vec<TaggedMessage> {
         TaggedMessage::new(
             65535,
             Message::Tversion(Tversion {
-                msize: 131096,
+                msize: 131_096,
                 version: "9P2000".to_string(),
             }),
         ),
@@ -1299,7 +952,7 @@ fn expected_client_messages() -> Vec<TaggedMessage> {
             Message::Tcreate(Tcreate {
                 fid: 1,
                 name: "subdir".to_string(),
-                perm: 0o755 | 0x80000000, // DMDIR
+                perm: 0o755 | 0x8000_0000, // DMDIR
                 mode: 0,
             }),
         ),
@@ -1430,7 +1083,7 @@ fn expected_server_messages() -> Vec<TaggedMessage> {
         TaggedMessage::new(
             0,
             Message::Rattach(Rattach {
-                qid: Qid::from_log_format(0x001de954, 1748236823, 'd'),
+                qid: Qid::from_log_format(0x001d_e954, 1_748_236_823, 'd'),
             }),
         ),
         TaggedMessage::new(
@@ -1449,7 +1102,7 @@ fn expected_server_messages() -> Vec<TaggedMessage> {
         TaggedMessage::new(
             0,
             Message::Ropen(Ropen {
-                qid: Qid::from_log_format(0x001de954, 1748236823, 'd'),
+                qid: Qid::from_log_format(0x001d_e954, 1_748_236_823, 'd'),
                 iounit: 0,
             }),
         ),
