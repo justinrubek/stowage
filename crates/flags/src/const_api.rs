@@ -23,6 +23,11 @@ where
         marker: PhantomData,
     };
 
+    pub const MAX: Self = BitFlags {
+        val: T::MAX,
+        marker: PhantomData,
+    };
+
     /// A `BitFlags` with all flags set. Equivalent to [`all()`][BitFlags::all],
     /// but works in a const context.
     pub const ALL: Self = BitFlags {

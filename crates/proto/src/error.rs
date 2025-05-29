@@ -6,6 +6,9 @@ pub enum Error {
     #[error("invalid message type: {0}")]
     InvalidMessageType(u8),
 
+    #[error("invalid qid type: {0}")]
+    InvalidQidType(u8),
+
     #[error("invalid UTF-8 string")]
     InvalidUtf8(#[from] std::string::FromUtf8Error),
 

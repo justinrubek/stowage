@@ -97,7 +97,6 @@
 //!
 //! [const-trait-rfc]: https://github.com/rust-lang/rfcs/pull/2632
 #![warn(missing_docs)]
-#![cfg_attr(all(not(test), not(feature = "std")), no_std)]
 
 use core::hash::{Hash, Hasher};
 use core::marker::PhantomData;
@@ -316,6 +315,9 @@ pub mod _internal {
 
         /// A value with no bits set.
         const EMPTY: Self::Numeric;
+
+        /// A value with the maximum bit pattern set
+        const MAX: Self::Numeric;
 
         /// The value used by the Default implementation. Equivalent to EMPTY, unless
         /// customized.

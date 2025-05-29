@@ -1,4 +1,5 @@
 [dependencies]
+enumflags2 = { path = "../flags" }
 stowage-proto = { path = "../proto" }
 stowage-service = { path = "../service" }
 tracing = { workspace = true }

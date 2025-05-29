@@ -1,3 +1,7 @@
+use enumflags2::BitFlags;
+
+use crate::QidType;
+
 use super::{
     Message, Qid, Rattach, Rauth, Rclunk, Rcreate, Rerror, Rflush, Ropen, Rread, Rremove, Rstat,
     Rversion, Rwalk, Rwrite, Rwstat, Stat, TaggedMessage, Tattach, Tauth, Tclunk, Tcreate, Tflush,
@@ -7,17 +11,22 @@ use std::fmt;
 
 impl fmt::Display for Qid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let type_char = match self.qtype {
-            0x80 => 'd', // directory
-            0x40 => 'a', // append-only
-            0x20 => 'l', // exclusive-use
-            0x10 => 'm', // mounted
-            0x08 => 'A', // auth
-            0x04 => 't', // temporary
-            _ => ' ',    // regular file
+        let char = if self.qtype.contains(QidType::Dir) {
+            'd' // directory
+        } else if self.qtype.contains(QidType::Append) {
+            'a' // append-only
+        } else if self.qtype.contains(QidType::Exclusive) {
+            'l' // exclusive-use
+        } else if self.qtype.contains(QidType::Mount) {
+            'm' // mounted
+        } else if self.qtype.contains(QidType::Auth) {
+            'A' // auth
+        } else if self.qtype.contains(QidType::Tmp) {
+            't' // temporary
+        } else {
+            ' ' // regular file (no flags set)
         };
-
-        write!(f, "{:016x} {} {}", self.path, self.version, type_char)
+        write!(f, "{:016x} {} {char}", self.path, self.version)
     }
 }
 
@@ -394,7 +403,7 @@ impl fmt::Display for Stat {
 
         let qid_str = if Stat::is_dont_touch_u32(self.qid.version)
             && Stat::is_dont_touch_u64(self.qid.path)
-            && self.qid.qtype == 0xFF
+            && self.qid.qtype.bits() == 0xFF
         {
             "(ffffffffffffffff 18446744073709551615 dalmA)".to_string()
         } else {

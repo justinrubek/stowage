@@ -1,3 +1,4 @@
+use enumflags2::BitFlag;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -631,9 +632,9 @@ impl MessageHandler for Handler {
 
 fn create_qid_from_metadata(metadata: &fs::Metadata) -> Qid {
     let qtype = if metadata.is_dir() {
-        QidType::Dir as u8
+        QidType::Dir.into()
     } else {
-        QidType::File as u8
+        QidType::empty()
     };
 
     Qid {
@@ -647,7 +648,7 @@ fn stat_from_metadata(metadata: &fs::Metadata, path: &Path) -> Stat {
     let qid = create_qid_from_metadata(metadata);
 
     Stat {
-        r#type: u16::from(qid.qtype),
+        r#type: qid.qtype.bits() as u16,
         dev: 0, // not needed for this implementation
         qid,
         mode: metadata.mode(),

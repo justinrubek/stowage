@@ -342,6 +342,8 @@ fn gen_enumflags(ast: &mut DeriveInput, default: Vec<Ident>) -> Result<TokenStre
 
                 const EMPTY: Self::Numeric = 0;
 
+                const MAX: Self::Numeric = Self::Numeric::MAX;
+
                 const DEFAULT: Self::Numeric =
                     0 #(| (Self::#default as #repr))*;
 
