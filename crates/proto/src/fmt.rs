@@ -9,22 +9,32 @@ use std::fmt;
 
 impl fmt::Display for Qid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let char = if self.qtype.contains(QidType::Dir) {
-            'd' // directory
-        } else if self.qtype.contains(QidType::Append) {
-            'a' // append-only
-        } else if self.qtype.contains(QidType::Exclusive) {
-            'l' // exclusive-use
-        } else if self.qtype.contains(QidType::Mount) {
-            'm' // mounted
-        } else if self.qtype.contains(QidType::Auth) {
-            'A' // auth
-        } else if self.qtype.contains(QidType::Tmp) {
-            't' // temporary
-        } else {
-            ' ' // regular file (no flags set)
-        };
-        write!(f, "{:016x} {} {char}", self.path, self.version)
+        let mut chars = String::new();
+
+        if self.qtype.contains(QidType::Dir) {
+            chars.push('d');
+        }
+        if self.qtype.contains(QidType::Append) {
+            chars.push('a');
+        }
+        if self.qtype.contains(QidType::Exclusive) {
+            chars.push('l');
+        }
+        if self.qtype.contains(QidType::Mount) {
+            chars.push('m');
+        }
+        if self.qtype.contains(QidType::Auth) {
+            chars.push('A');
+        }
+        if self.qtype.contains(QidType::Tmp) {
+            chars.push('t');
+        }
+
+        // If no flags are set, show a space for regular file
+        if chars.is_empty() {
+            chars.push(' ');
+        }
+        write!(f, "{:016x} {} {chars}", self.path, self.version)
     }
 }
 

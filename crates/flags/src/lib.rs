@@ -355,6 +355,7 @@ pub mod _internal {
         + Clone
     {
         const ONE: Self;
+        const MAX: Self;
 
         fn is_power_of_two(self) -> bool;
         fn count_ones(self) -> u32;
@@ -364,6 +365,7 @@ pub mod _internal {
     for_each_uint! { $ty $hide_docs =>
         impl BitFlagNum for $ty {
             const ONE: Self = 1;
+            const MAX: Self = <$ty>::MAX;
 
             fn is_power_of_two(self) -> bool {
                 <$ty>::is_power_of_two(self)
@@ -647,10 +649,14 @@ where
         if flags.bits() == bits {
             Ok(flags)
         } else {
-            Err(FromBitsError {
-                flags,
-                invalid: bits & !flags.bits(),
-            })
+            if bits == T::Numeric::MAX {
+                Ok(Self::MAX)
+            } else {
+                Err(FromBitsError {
+                    flags,
+                    invalid: bits & !flags.bits(),
+                })
+            }
         }
     }
 
@@ -778,7 +784,7 @@ where
     ///     Three = 1 << 2,
     /// }
     ///
-    /// let empty: BitFlags<MyFlag> = BitFlags::empty();
+    /// let empty: BitFlags<MyFlag> = BitFlags::maximum();
     /// assert!(empty.is_max());
     /// ```
     #[inline(always)]
