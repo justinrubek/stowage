@@ -1,0 +1,11 @@
+error: expected enum for #[bitflags], found struct
+ --> ui/not_enum.rs:3:1
+  |
+3 | struct Foo(u16);
+  | ^^^^^^
+
+error: expected one of: `struct`, `enum`, `union`
+ --> ui/not_enum.rs:6:1
+  |
+6 | const WTF: u8 = 42;
+  | ^^^^^

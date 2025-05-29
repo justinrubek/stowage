@@ -1,0 +1,67 @@
+[package]
+name = "bitflags-test-suite"
+version = "0.0.0"
+publish = false
+edition = "2018"
+
+[dependencies.enumflags2]
+path = "../"
+features = ["serde"]
+
+[dependencies.serde]
+version = "1"
+features = ["derive"]
+
+[dev-dependencies]
+trybuild = "1.0"
+glob = "0.3"
+
+[[test]]
+name = "ui-tests"
+path = "ui_tests.rs"
+edition = "2018"
+
+[[test]]
+name = "bitflags-test"
+path = "tests/bitflag_tests.rs"
+edition = "2015"
+
+[[test]]
+name = "bitflags-test-no-std"
+path = "tests/no_std.rs"
+edition = "2015"
+
+[[test]]
+name = "bitflags-test-no-implicit-prelude"
+path = "tests/no_implicit_prelude.rs"
+edition = "2015"
+
+[[test]]
+name = "bitflags-test-2018"
+path = "tests/bitflag_tests_2018.rs"
+edition = "2018"
+
+[[test]]
+name = "bitflags-test-no-std-2018"
+path = "tests/no_std_2018.rs"
+edition = "2018"
+
+[[test]]
+name = "bitflags-test-no-implicit-prelude-2018"
+path = "tests/no_implicit_prelude_2018.rs"
+edition = "2018"
+
+[[test]]
+name = "bitflags-requires-std"
+path = "tests/requires_std.rs"
+edition = "2018"
+
+[[test]]
+name = "serde"
+path = "tests/serde.rs"
+edition = "2018"
+
+[[test]]
+name = "not_literal"
+path = "tests/not_literal.rs"
+edition = "2018"

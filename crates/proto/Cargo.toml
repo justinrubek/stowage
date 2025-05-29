@@ -1,6 +1,7 @@
 [dependencies]
 byteorder = "1.5.0"
 bytes = { workspace = true }
+enumflags2 = { path = "../flags" }
 futures = { workspace = true }
 hex = "0.4.3"
 # serde = { workspace = true }
