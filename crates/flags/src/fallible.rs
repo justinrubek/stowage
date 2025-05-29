@@ -71,7 +71,6 @@ impl<T: BitFlag + fmt::Debug> fmt::Display for FromBitsError<T> {
     }
 }
 
-#[cfg(feature = "std")]
 impl<T: BitFlag + fmt::Debug> std::error::Error for FromBitsError<T> {
     fn description(&self) -> &str {
         "invalid bitflags representation"

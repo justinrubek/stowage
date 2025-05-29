@@ -250,13 +250,13 @@ fn gen_enumflags(ast: &mut DeriveInput, default: Vec<Ident>) -> Result<TokenStre
         Data::Enum(ref mut data) => &mut data.variants,
         Data::Struct(data) => {
             return Err(syn::Error::new_spanned(
-                &data.struct_token,
+                data.struct_token,
                 "expected enum for #[bitflags], found struct",
             ));
         }
         Data::Union(data) => {
             return Err(syn::Error::new_spanned(
-                &data.union_token,
+                data.union_token,
                 "expected enum for #[bitflags], found union",
             ));
         }

@@ -760,6 +760,32 @@ where
         Self::EMPTY
     }
 
+    /// Create a `BitFlags` with the maximum value (in other words, with a value of
+    /// `Self::Numeric::MAX`).
+    ///
+    /// See also: [`BitFlag::max`], a convenience reexport;
+    /// [`BitFlags::MAX`], the same functionality available
+    /// as a constant for `const fn` code.
+    ///
+    /// ```
+    /// # use enumflags2::{bitflags, BitFlags};
+    /// #[bitflags]
+    /// #[repr(u8)]
+    /// #[derive(Clone, Copy, PartialEq, Eq)]
+    /// enum MyFlag {
+    ///     One = 1 << 0,
+    ///     Two = 1 << 1,
+    ///     Three = 1 << 2,
+    /// }
+    ///
+    /// let empty: BitFlags<MyFlag> = BitFlags::empty();
+    /// assert!(empty.is_max());
+    /// ```
+    #[inline(always)]
+    pub fn maximum() -> Self {
+        Self::MAX
+    }
+
     /// Create a `BitFlags` with all flags set.
     ///
     /// See also: [`BitFlag::all`], a convenience reexport;
@@ -798,6 +824,12 @@ where
     #[inline(always)]
     pub fn is_empty(self) -> bool {
         self.val == T::EMPTY
+    }
+
+    /// Returns true if the flag is the special maximum value
+    #[inline(always)]
+    pub fn is_max(self) -> bool {
+        self.val == T::MAX
     }
 
     /// Returns the number of flags set.
@@ -1027,7 +1059,6 @@ where
     }
 }
 
-#[cfg(feature = "serde")]
 mod impl_serde {
     use super::{BitFlag, BitFlags};
     use serde::de::{Error, Unexpected};

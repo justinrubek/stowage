@@ -648,7 +648,7 @@ fn stat_from_metadata(metadata: &fs::Metadata, path: &Path) -> Stat {
     let qid = create_qid_from_metadata(metadata);
 
     Stat {
-        r#type: qid.qtype.bits() as u16,
+        r#type: qid.qtype.bits().into(),
         dev: 0, // not needed for this implementation
         qid,
         mode: metadata.mode(),

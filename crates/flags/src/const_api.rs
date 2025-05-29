@@ -23,6 +23,8 @@ where
         marker: PhantomData,
     };
 
+    /// A maximum `BitFlags`. Equivalent to [`maximum()`][BitFlags::maximum],
+    /// but works in a const context.
     pub const MAX: Self = BitFlags {
         val: T::MAX,
         marker: PhantomData,

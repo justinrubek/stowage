@@ -1,5 +1,3 @@
-use enumflags2::BitFlags;
-
 use crate::QidType;
 
 use super::{
