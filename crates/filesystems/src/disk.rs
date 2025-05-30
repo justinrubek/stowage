@@ -1,3 +1,4 @@
+use flagset::FlagSet;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -5,17 +6,11 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use stowage_proto::{
-    Message, Qid, QidType, Rattach, Rclunk, Rcreate, Rerror, Rflush, Ropen, Rread, Rremove, Rstat,
-    Rwalk, Rwrite, Rwstat, Stat, Tattach, Tclunk, Tcreate, Tflush, Topen, Tread, Tremove, Tstat,
-    Twalk, Twrite, Twstat,
+    FileMode, Message, OpenMode, Qid, QidType, Rattach, Rclunk, Rcreate, Rerror, Rflush, Ropen,
+    Rread, Rremove, Rstat, Rwalk, Rwrite, Rwstat, Stat, Tattach, Tclunk, Tcreate, Tflush, Topen,
+    Tread, Tremove, Tstat, Twalk, Twrite, Twstat,
 };
 use stowage_service::MessageHandler;
-
-// Standard open mode flags for 9P2000
-const O_RDONLY: u8 = 0;
-const O_WRONLY: u8 = 1;
-const O_RDWR: u8 = 2;
-const O_EXEC: u8 = 3;
 
 pub struct Handler {
     dir: PathBuf,
@@ -183,18 +178,19 @@ impl MessageHandler for Handler {
         // convert 9P2000 open modes to rust file open options
         let mut options = OpenOptions::new();
 
-        // translate 9P2000 mode flags to Rust OpenOptions
         match mode {
-            O_RDONLY => {
+            mode if mode.contains(OpenMode::Read) && !mode.contains(OpenMode::Write) => {
                 options.read(true);
             }
-            O_WRONLY => {
+            mode if mode.contains(OpenMode::Write) && !mode.contains(OpenMode::Read) => {
                 options.write(true);
             }
-            O_RDWR => {
+            mode if mode.contains(OpenMode::ReadWrite)
+                || (mode.contains(OpenMode::Read) && mode.contains(OpenMode::Write)) =>
+            {
                 options.read(true).write(true);
             }
-            O_EXEC => {
+            mode if mode.contains(OpenMode::Exec) => {
                 options.read(true); // Execute mode is just read in this implementation
             }
             _ => {
@@ -244,12 +240,9 @@ impl MessageHandler for Handler {
     }
 
     async fn create(&self, message: &Tcreate) -> Message {
-        let fid = message.fid;
         let name = message.name.clone();
-        let perm = message.perm;
-        let mode = message.mode;
 
-        let Ok(dir_path) = self.path_for_fid(fid) else {
+        let Ok(dir_path) = self.path_for_fid(message.fid) else {
             return Message::error("Fid not found".to_string());
         };
 
@@ -271,33 +264,37 @@ impl MessageHandler for Handler {
         // convert 9P mode to rust file open options
         let mut options = OpenOptions::new();
         options.create(true);
-
-        // translate 9P mode flags to Rust OpenOptions
-        match mode {
-            O_RDONLY => {
+        match message.mode {
+            mode if mode.contains(OpenMode::Read) && !mode.contains(OpenMode::Write) => {
                 options.read(true);
             }
-            O_WRONLY => {
+            mode if mode.contains(OpenMode::Write) && !mode.contains(OpenMode::Read) => {
                 options.write(true);
             }
-            O_RDWR => {
+            mode if mode.contains(OpenMode::ReadWrite)
+                || (mode.contains(OpenMode::Read) && mode.contains(OpenMode::Write)) =>
+            {
                 options.read(true).write(true);
             }
-            _ => return Message::error("Invalid open mode".to_string()),
+            mode if mode.contains(OpenMode::Exec) => {
+                options.read(true); // Execute mode is just read in this implementation
+            }
+            _ => {
+                return Message::Rerror(Rerror {
+                    ename: "Invalid open mode".to_string(),
+                })
+            }
         }
 
-        // Check if it's a directory create request
-        let is_dir = (perm & 0x8000_0000) != 0;
-
-        // Handle directory creation
-        if is_dir {
+        // handle directory creation
+        if message.perm.contains(FileMode::Dir) {
             match fs::create_dir(&file_path) {
                 Ok(()) => {
                     // Set permissions
                     #[cfg(unix)]
                     {
                         if let Ok(mut perms) = fs::metadata(&file_path).map(|m| m.permissions()) {
-                            perms.set_mode(perm & 0o777);
+                            perms.set_mode(message.perm.bits() & 0o777);
                             let _ = fs::set_permissions(&file_path, perms);
                         }
                     }
@@ -308,7 +305,7 @@ impl MessageHandler for Handler {
 
                             // Update the fid to point to the new directory
                             let mut fids = self.fids.lock().unwrap();
-                            if let Some(entry) = fids.get_mut(&fid) {
+                            if let Some(entry) = fids.get_mut(&message.fid) {
                                 entry.path = file_path;
                                 entry.opened = true;
                                 entry.is_dir = true;
@@ -332,7 +329,7 @@ impl MessageHandler for Handler {
                     #[cfg(unix)]
                     {
                         if let Ok(mut perms) = fs::metadata(&file_path).map(|m| m.permissions()) {
-                            perms.set_mode(perm & 0o777);
+                            perms.set_mode(message.perm.bits() & 0o777);
                             let _ = fs::set_permissions(&file_path, perms);
                         }
                     }
@@ -343,7 +340,7 @@ impl MessageHandler for Handler {
 
                             // update the fid entry to point to the new file
                             let mut fids = self.fids.lock().unwrap();
-                            if let Some(entry) = fids.get_mut(&fid) {
+                            if let Some(entry) = fids.get_mut(&message.fid) {
                                 entry.path = file_path;
                                 entry.opened = true;
                                 entry.is_dir = false;
@@ -402,7 +399,14 @@ impl MessageHandler for Handler {
                     for dir_entry in entries_to_process.flatten() {
                         if let Ok(metadata) = dir_entry.metadata() {
                             // Create a stat for each entry
-                            let _stat = stat_from_metadata(&metadata, &dir_entry.path());
+                            let _stat = match stat_from_metadata(&metadata, &dir_entry.path()) {
+                                Ok(stat) => stat,
+                                Err(e) => {
+                                    return Message::Rerror(Rerror {
+                                        ename: format!("failed to build stat: {e}"),
+                                    })
+                                }
+                            };
 
                             // Encode the stat structure to bytes
                             // This is simplified - you would need proper encoding logic here
@@ -552,7 +556,14 @@ impl MessageHandler for Handler {
 
         match fs::metadata(&path) {
             Ok(metadata) => {
-                let stat = stat_from_metadata(&metadata, &path);
+                let stat = match stat_from_metadata(&metadata, &path) {
+                    Ok(stat) => stat,
+                    Err(e) => {
+                        return Message::Rerror(Rerror {
+                            ename: format!("failed to build stat: {e}"),
+                        })
+                    }
+                };
                 Message::Rstat(Rstat { stat })
             }
             Err(e) => Message::Rerror(Rerror {
@@ -575,11 +586,11 @@ impl MessageHandler for Handler {
         let mut error = None;
 
         // change permissions if mode is not ~0
-        if stat.mode != 0xFFFF_FFFF {
+        if stat.mode != FileMode::DontTouch {
             #[cfg(unix)]
             {
                 if let Ok(mut perms) = fs::metadata(&path).map(|m| m.permissions()) {
-                    perms.set_mode(stat.mode & 0o777);
+                    perms.set_mode(stat.mode.bits() & 0o777);
                     if let Err(e) = fs::set_permissions(&path, perms) {
                         error = Some(e);
                     }
@@ -643,14 +654,14 @@ fn create_qid_from_metadata(metadata: &fs::Metadata) -> Qid {
     }
 }
 
-fn stat_from_metadata(metadata: &fs::Metadata, path: &Path) -> Stat {
+fn stat_from_metadata(metadata: &fs::Metadata, path: &Path) -> stowage_proto::error::Result<Stat> {
     let qid = create_qid_from_metadata(metadata);
 
-    Stat {
+    Ok(Stat {
         r#type: u16::from(qid.qtype.bits()),
         dev: 0, // not needed for this implementation
         qid,
-        mode: metadata.mode(),
+        mode: FlagSet::<FileMode>::new(metadata.mode())?,
         atime: u32::try_from(metadata.atime()).unwrap(),
         mtime: u32::try_from(metadata.mtime()).unwrap(),
         length: metadata.len(),
@@ -662,5 +673,5 @@ fn stat_from_metadata(metadata: &fs::Metadata, path: &Path) -> Stat {
         uid: metadata.uid().to_string(),
         gid: metadata.gid().to_string(),
         muid: String::new(), // not tracked in this implementation
-    }
+    })
 }

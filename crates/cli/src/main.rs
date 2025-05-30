@@ -9,8 +9,9 @@ use futures::{SinkExt, StreamExt};
 use std::{io::Cursor, path::PathBuf, sync::Arc};
 use stowage_filesystems::disk::Handler;
 use stowage_proto::{
-    consts::P9_NOFID, Decodable, Message, MessageCodec, QidType, Stat, TaggedMessage, Tattach,
-    Tauth, Tclunk, Tcreate, Topen, Tread, Tstat, Tversion, Twalk, Twrite, Twstat,
+    consts::P9_NOFID, Decodable, FileMode, Message, MessageCodec, OpenMode, QidType, Stat,
+    TaggedMessage, Tattach, Tauth, Tclunk, Tcreate, Topen, Tread, Tstat, Tversion, Twalk, Twrite,
+    Twstat,
 };
 use stowage_service::Plan9;
 use tokio::net::{TcpListener, TcpStream};
@@ -284,7 +285,7 @@ async fn ls_command(
 
     let open_msg = Topen {
         fid: root_fid,
-        mode: 0, // OREAD
+        mode: OpenMode::Read.into(),
     };
     send_message(
         conn,
@@ -370,7 +371,7 @@ async fn read_directory_contents(
                                 "{:>8} {} {}",
                                 stat.length,
                                 stat.name,
-                                if stat.mode & 0x8000_0000 != 0 {
+                                if stat.mode.contains(FileMode::Dir) {
                                     "/"
                                 } else {
                                     ""
@@ -475,8 +476,8 @@ async fn create_directory(
         let create_msg = Tcreate {
             fid: root_fid,
             name: components[index].clone(),
-            perm: 0o755 | 0x8000_0000, // directory permissions with DMDIR bit
-            mode: 0,                   // OREAD
+            perm: FileMode::from_unix_perm(0o755, true),
+            mode: OpenMode::Read.into(),
         };
         send_message(
             conn,
@@ -520,8 +521,8 @@ async fn create_directory(
         let create_msg = Tcreate {
             fid: parent_fid,
             name: components[index].clone(),
-            perm: 0o755 | 0x8000_0000,
-            mode: 0,
+            perm: FileMode::from_unix_perm(0o755, true),
+            mode: OpenMode::Read.into(),
         };
         send_message(
             conn,
@@ -595,7 +596,7 @@ async fn handle_existing_file_touch(
     let response = receive_message(conn).await?;
     match response.message {
         Message::Rstat(rstat) => {
-            if rstat.stat.mode & 0x8000_0000 != 0 {
+            if rstat.stat.mode.contains(FileMode::Dir) {
                 cleanup_fid(conn, tag, file_fid).await?;
                 return Err(Error::Other(format!("touch: {path}: Is a directory")));
             }
@@ -672,8 +673,8 @@ async fn create_new_file(
         let create_msg = Tcreate {
             fid: root_fid,
             name: filename,
-            perm: 0o644,
-            mode: 2, // OWRITE to create and immediately close
+            perm: FileMode::from_unix_perm(0o644, false),
+            mode: OpenMode::Write.into(), // create and immediately close
         };
         send_message(
             conn,
@@ -719,8 +720,8 @@ async fn create_new_file(
         let create_msg = Tcreate {
             fid: parent_fid,
             name: filename,
-            perm: 0o644,
-            mode: 2,
+            perm: FileMode::from_unix_perm(0o644, false),
+            mode: OpenMode::ReadWrite.into(),
         };
         send_message(
             conn,
@@ -810,7 +811,7 @@ async fn open_file_for_writing(
 ) -> Result<(u32, u64)> {
     let open_msg = Topen {
         fid: file_fid,
-        mode: 1, // OWRITE
+        mode: OpenMode::Write.into(),
     };
     send_message(
         conn,
@@ -888,8 +889,8 @@ async fn create_file_for_writing(
         let create_msg = Tcreate {
             fid: root_fid,
             name: filename,
-            perm: 0o644,
-            mode: 1, // OWRITE
+            perm: FileMode::from_unix_perm(0o644, false),
+            mode: OpenMode::Write.into(),
         };
         send_message(
             conn,
@@ -931,8 +932,8 @@ async fn create_file_for_writing(
         let create_msg = Tcreate {
             fid: parent_fid,
             name: filename,
-            perm: 0o644,
-            mode: 1, // OWRITE
+            perm: FileMode::from_unix_perm(0o644, false),
+            mode: OpenMode::Write.into(),
         };
         send_message(
             conn,
@@ -1032,7 +1033,7 @@ async fn cat_command(conn: &mut Connection, tag: u16, path: String, msize: u32) 
     // open file for reading
     let open_msg = Topen {
         fid: root_fid,
-        mode: 0, // OREAD
+        mode: OpenMode::Read.into(),
     };
     send_message(
         conn,

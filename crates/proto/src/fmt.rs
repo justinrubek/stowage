@@ -1,4 +1,6 @@
-use crate::QidType;
+use flagset::FlagSet;
+
+use crate::{FileMode, OpenMode, QidType};
 
 use super::{
     Message, Qid, Rattach, Rauth, Rclunk, Rcreate, Rerror, Rflush, Ropen, Rread, Rremove, Rstat,
@@ -92,45 +94,88 @@ fn format_fid(fid: u32) -> String {
     }
 }
 
-fn format_perm(perm: u32) -> String {
-    let is_dir = perm & 0x8000_0000 != 0;
+fn format_perm(perm: FlagSet<FileMode>) -> String {
     let mut result = String::new();
 
-    if is_dir {
+    if perm.contains(FileMode::Dir) {
         result.push('d');
     } else {
         result.push('-');
     }
 
-    // owner permissions
-    result.push(if perm & 0x400 != 0 { 'r' } else { '-' });
-    result.push(if perm & 0x200 != 0 { 'w' } else { '-' });
-    result.push(if perm & 0x100 != 0 { 'x' } else { '-' });
+    result.push(if perm.contains(FileMode::OwnerRead) {
+        'r'
+    } else {
+        '-'
+    });
+    result.push(if perm.contains(FileMode::OwnerWrite) {
+        'w'
+    } else {
+        '-'
+    });
+    result.push(if perm.contains(FileMode::OwnerExec) {
+        'x'
+    } else {
+        '-'
+    });
 
-    // group permissions
-    result.push(if perm & 0x40 != 0 { 'r' } else { '-' });
-    result.push(if perm & 0x20 != 0 { 'w' } else { '-' });
-    result.push(if perm & 0x10 != 0 { 'x' } else { '-' });
+    result.push(if perm.contains(FileMode::GroupRead) {
+        'r'
+    } else {
+        '-'
+    });
+    result.push(if perm.contains(FileMode::GroupWrite) {
+        'w'
+    } else {
+        '-'
+    });
+    result.push(if perm.contains(FileMode::GroupExec) {
+        'x'
+    } else {
+        '-'
+    });
 
-    // other permissions
-    result.push(if perm & 0x4 != 0 { 'r' } else { '-' });
-    result.push(if perm & 0x2 != 0 { 'w' } else { '-' });
-    result.push(if perm & 0x1 != 0 { 'x' } else { '-' });
+    result.push(if perm.contains(FileMode::OtherRead) {
+        'r'
+    } else {
+        '-'
+    });
+    result.push(if perm.contains(FileMode::OtherWrite) {
+        'w'
+    } else {
+        '-'
+    });
+    result.push(if perm.contains(FileMode::OtherExec) {
+        'x'
+    } else {
+        '-'
+    });
 
     result
 }
 
-fn format_mode(mode: u8) -> String {
-    match mode {
-        0 => "0".to_string(),   // OREAD
-        1 => "1".to_string(),   // OWRITE
-        2 => "2".to_string(),   // ORDWR
-        3 => "3".to_string(),   // OEXEC
-        16 => "16".to_string(), // OTRUNC
-        64 => "64".to_string(), // ORCLOSE
-        17 => "17".to_string(), // OTRUNC|OWRITE
-        _ => format!("{mode}"),
+fn format_mode(mode: FlagSet<OpenMode>) -> String {
+    if mode.is_empty() {
+        return "0".to_string();
     }
+
+    if mode == OpenMode::Read {
+        return "0".to_string();
+    } else if mode == OpenMode::Write {
+        return "1".to_string();
+    } else if mode == OpenMode::ReadWrite {
+        return "2".to_string();
+    } else if mode == OpenMode::Exec {
+        return "3".to_string();
+    } else if mode == OpenMode::Trunc {
+        return "16".to_string();
+    } else if mode == OpenMode::RClose {
+        return "64".to_string();
+    } else if mode == (OpenMode::Trunc | OpenMode::Write) {
+        return "17".to_string();
+    }
+
+    format!("{mode:?}")
 }
 
 impl fmt::Display for Tversion {
@@ -420,15 +465,7 @@ impl fmt::Display for Stat {
         };
 
         // handle mode - output in octal for readability and compatibility with u9fs
-        let mode_str = if Stat::is_dont_touch_u32(self.mode) {
-            "01777777777777777777777".to_string()
-        } else if self.mode & 0x8000_0000 != 0 {
-            // directory flag is set - use the format u9fs expects
-            format!("01777777777760000{:06o}", self.mode & 0x1FF)
-        } else {
-            // regular file - simple octal format
-            format!("{:04o}", self.mode & 0xFFFF)
-        };
+        let mode_str = format!("{:o}", self.mode.bits());
 
         // times
         let atime_str = if Stat::is_dont_touch_u32(self.atime) {

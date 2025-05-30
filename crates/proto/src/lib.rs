@@ -103,6 +103,37 @@ impl MessageType {
 }
 
 flags! {
+    #[repr(u32)]
+    pub enum FileMode: u32 {
+        Dir = 0x8000_0000,
+        AppendOnly = 0x4000_0000,
+        ExclAccess = 0x2000_0000,
+        Mounted = 0x1000_0000,
+        Auth = 0x0800_0000,
+
+        Temporary = 0x0400_0000,
+        OwnerRead = 0x0000_0100,
+        OwnerWrite = 0x0000_0080,
+        OwnerExec = 0x0000_0040,
+        GroupRead = 0x0000_0020,
+        GroupWrite = 0x0000_0010,
+        GroupExec = 0x0000_0008,
+        OtherRead = 0x0000_0004,
+        OtherWrite = 0x0000_0002,
+        OtherExec = 0x0000_0001,
+        DontTouch = !0,
+    }
+
+    #[repr(u8)]
+    pub enum OpenMode: u8 {
+        Read = 0,
+        Write = 1,
+        ReadWrite = 2,
+        Exec = 3,
+        Trunc = 0x10, // 16
+        RClose = 0x40, // 64
+    }
+
     #[repr(u8)]
     pub enum QidType: u8 {
         Dir = 0x80,
@@ -112,7 +143,50 @@ flags! {
         Auth = 0x08,
         Tmp = 0x04,
         File = 0x00,
-        DontTouch = 0xFF,
+        DontTouch = !0,
+    }
+}
+
+impl FileMode {
+    #[must_use]
+    pub fn from_unix_perm(mode: u32, is_dir: bool) -> FlagSet<FileMode> {
+        let mut flags = FlagSet::empty();
+
+        if is_dir {
+            flags |= FileMode::Dir;
+        }
+
+        if (mode & 0o400) != 0 {
+            flags |= FileMode::OwnerRead;
+        }
+        if (mode & 0o200) != 0 {
+            flags |= FileMode::OwnerWrite;
+        }
+        if (mode & 0o100) != 0 {
+            flags |= FileMode::OwnerExec;
+        }
+
+        if (mode & 0o040) != 0 {
+            flags |= FileMode::GroupRead;
+        }
+        if (mode & 0o020) != 0 {
+            flags |= FileMode::GroupWrite;
+        }
+        if (mode & 0o010) != 0 {
+            flags |= FileMode::GroupExec;
+        }
+
+        if (mode & 0o004) != 0 {
+            flags |= FileMode::OtherRead;
+        }
+        if (mode & 0o002) != 0 {
+            flags |= FileMode::OtherWrite;
+        }
+        if (mode & 0o001) != 0 {
+            flags |= FileMode::OtherExec;
+        }
+
+        flags
     }
 }
 
@@ -279,7 +353,7 @@ pub struct Rwalk {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Topen {
     pub fid: u32,
-    pub mode: u8,
+    pub mode: FlagSet<OpenMode>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -292,8 +366,8 @@ pub struct Ropen {
 pub struct Tcreate {
     pub fid: u32,
     pub name: String,
-    pub perm: u32,
-    pub mode: u8,
+    pub perm: FlagSet<FileMode>,
+    pub mode: FlagSet<OpenMode>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -458,6 +532,34 @@ impl Decodable for Bytes {
         r.read_exact(&mut data)?;
 
         Ok(Bytes::from(data))
+    }
+}
+
+impl Encodable for FlagSet<OpenMode> {
+    fn encode<W: WriteBytesExt>(&self, w: &mut W) -> Result<usize> {
+        self.bits().encode(w)
+    }
+}
+
+impl Decodable for FlagSet<OpenMode> {
+    fn decode<R: ReadBytesExt>(r: &mut R) -> Result<Self> {
+        let val = u8::decode(r)?;
+        let f = FlagSet::<OpenMode>::new(val)?;
+        Ok(f)
+    }
+}
+
+impl Encodable for FlagSet<FileMode> {
+    fn encode<W: WriteBytesExt>(&self, w: &mut W) -> Result<usize> {
+        self.bits().encode(w)
+    }
+}
+
+impl Decodable for FlagSet<FileMode> {
+    fn decode<R: ReadBytesExt>(r: &mut R) -> Result<Self> {
+        let val = u32::decode(r)?;
+        let f = FlagSet::<FileMode>::new(val)?;
+        Ok(f)
     }
 }
 
@@ -732,7 +834,7 @@ impl Decodable for Topen {
     fn decode<R: ReadBytesExt>(r: &mut R) -> Result<Self> {
         Ok(Topen {
             fid: u32::decode(r)?,
-            mode: u8::decode(r)?,
+            mode: FlagSet::<OpenMode>::decode(r)?,
         })
     }
 }
@@ -771,8 +873,8 @@ impl Decodable for Tcreate {
         Ok(Tcreate {
             fid: u32::decode(r)?,
             name: String::decode(r)?,
-            perm: u32::decode(r)?,
-            mode: u8::decode(r)?,
+            perm: FlagSet::<FileMode>::decode(r)?,
+            mode: FlagSet::<OpenMode>::decode(r)?,
         })
     }
 }
@@ -1142,7 +1244,7 @@ pub struct Stat {
     pub r#type: u16,
     pub dev: u32,
     pub qid: Qid,
-    pub mode: u32,
+    pub mode: FlagSet<FileMode>,
     pub atime: u32,
     pub mtime: u32,
     pub length: u64,
@@ -1165,7 +1267,7 @@ impl Stat {
                 version: u32::MAX,
                 path: u64::MAX,
             },
-            mode: u32::MAX,
+            mode: FileMode::DontTouch.into(),
             atime: u32::MAX,
             mtime: u32::MAX,
             length: u64::MAX,
@@ -1239,7 +1341,7 @@ impl Decodable for Stat {
         let r#type = u16::decode(&mut stat_cursor)?;
         let dev = u32::decode(&mut stat_cursor)?;
         let qid = Qid::decode(&mut stat_cursor)?;
-        let mode = u32::decode(&mut stat_cursor)?;
+        let mode = FlagSet::<FileMode>::decode(&mut stat_cursor)?;
         let atime = u32::decode(&mut stat_cursor)?;
         let mtime = u32::decode(&mut stat_cursor)?;
         let length = u64::decode(&mut stat_cursor)?;
