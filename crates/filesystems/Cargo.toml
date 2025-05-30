@@ -1,4 +1,5 @@
 [dependencies]
+flagset = { workspace = true }
 stowage-proto = { path = "../proto" }
 stowage-service = { path = "../service" }
 tracing = { workspace = true }

@@ -187,6 +187,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 
 [[package]]
+name = "flagset"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7ac824320a75a52197e8f2d787f6a38b6718bb6897a35142d749af3c0e8f4fe"
+
+[[package]]
 name = "futures"
 version = "0.3.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -552,6 +558,7 @@ dependencies = [
 name = "stowage-filesystems"
 version = "0.1.0"
 dependencies = [
+ "flagset",
  "stowage-proto",
  "stowage-service",
  "tracing",
@@ -563,6 +570,7 @@ version = "0.1.0"
 dependencies = [
  "byteorder",
  "bytes",
+ "flagset",
  "futures",
  "hex",
  "thiserror",

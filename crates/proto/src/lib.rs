@@ -2,6 +2,7 @@ use crate::error::{Error, Result};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use bytes::{Bytes, BytesMut};
 use ext::BytesMutWriteExt;
+use flagset::{flags, FlagSet};
 use std::io::Cursor;
 use tokio_util::codec::{Decoder, Encoder, LengthDelimitedCodec};
 
@@ -101,21 +102,23 @@ impl MessageType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum QidType {
-    Dir = 0x80,
-    Append = 0x40,
-    Exclusive = 0x20,
-    Mount = 0x10,
-    Auth = 0x08,
-    Tmp = 0x04,
-    File = 0x00,
+flags! {
+    #[repr(u8)]
+    pub enum QidType: u8 {
+        Dir = 0x80,
+        Append = 0x40,
+        Exclusive = 0x20,
+        Mount = 0x10,
+        Auth = 0x08,
+        Tmp = 0x04,
+        File = 0x00,
+        DontTouch = 0xFF,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Qid {
-    pub qtype: u8,
+    pub qtype: FlagSet<QidType>,
     pub version: u32,
     pub path: u64,
 }
@@ -458,6 +461,20 @@ impl Decodable for Bytes {
     }
 }
 
+impl Encodable for FlagSet<QidType> {
+    fn encode<W: WriteBytesExt>(&self, w: &mut W) -> Result<usize> {
+        self.bits().encode(w)
+    }
+}
+
+impl Decodable for FlagSet<QidType> {
+    fn decode<R: ReadBytesExt>(r: &mut R) -> Result<Self> {
+        let val = u8::decode(r)?;
+        let f = FlagSet::<QidType>::new(val)?;
+        Ok(f)
+    }
+}
+
 impl Encodable for Qid {
     fn encode<W: WriteBytesExt>(&self, w: &mut W) -> Result<usize> {
         let mut bytes_written = 0;
@@ -473,7 +490,7 @@ impl Encodable for Qid {
 impl Decodable for Qid {
     fn decode<R: ReadBytesExt>(r: &mut R) -> Result<Self> {
         Ok(Qid {
-            qtype: u8::decode(r)?,
+            qtype: FlagSet::<QidType>::decode(r)?,
             version: u32::decode(r)?,
             path: u64::decode(r)?,
         })
@@ -1119,24 +1136,6 @@ impl Encoder<TaggedMessage> for MessageCodec {
     }
 }
 
-impl Qid {
-    #[must_use]
-    pub fn from_log_format(path: u64, version: u32, qtype_char: char) -> Self {
-        let qtype = match qtype_char {
-            'd' => 0x80, // QTDIR
-            'a' => 0x40, // QTAPPEND
-            'l' => 0x02, // QTLINK
-            _ => 0x00,   // QTFILE
-        };
-
-        Self {
-            qtype,
-            version,
-            path,
-        }
-    }
-}
-
 /// Represents a 9P stat structure as defined in the protocol
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stat {
@@ -1162,7 +1161,7 @@ impl Stat {
             r#type: u16::MAX,
             dev: u32::MAX,
             qid: Qid {
-                qtype: 0xFF, // don't touch value for qtype
+                qtype: QidType::DontTouch.into(),
                 version: u32::MAX,
                 path: u64::MAX,
             },

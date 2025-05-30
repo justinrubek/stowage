@@ -1,5 +1,8 @@
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    #[error(transparent)]
+    FlagsetInvalidBits(#[from] flagset::InvalidBits),
+
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 

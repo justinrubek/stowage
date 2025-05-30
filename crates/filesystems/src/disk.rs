@@ -631,13 +631,13 @@ impl MessageHandler for Handler {
 
 fn create_qid_from_metadata(metadata: &fs::Metadata) -> Qid {
     let qtype = if metadata.is_dir() {
-        QidType::Dir as u8
+        QidType::Dir
     } else {
-        QidType::File as u8
+        QidType::File
     };
 
     Qid {
-        qtype,
+        qtype: qtype.into(),
         version: 0, // version is not tracked in this implementation
         path: metadata.ino(),
     }
@@ -647,7 +647,7 @@ fn stat_from_metadata(metadata: &fs::Metadata, path: &Path) -> Stat {
     let qid = create_qid_from_metadata(metadata);
 
     Stat {
-        r#type: u16::from(qid.qtype),
+        r#type: u16::from(qid.qtype.bits()),
         dev: 0, // not needed for this implementation
         qid,
         mode: metadata.mode(),

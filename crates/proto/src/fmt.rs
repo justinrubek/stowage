@@ -1,3 +1,5 @@
+use crate::QidType;
+
 use super::{
     Message, Qid, Rattach, Rauth, Rclunk, Rcreate, Rerror, Rflush, Ropen, Rread, Rremove, Rstat,
     Rversion, Rwalk, Rwrite, Rwstat, Stat, TaggedMessage, Tattach, Tauth, Tclunk, Tcreate, Tflush,
@@ -7,17 +9,33 @@ use std::fmt;
 
 impl fmt::Display for Qid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let type_char = match self.qtype {
-            0x80 => 'd', // directory
-            0x40 => 'a', // append-only
-            0x20 => 'l', // exclusive-use
-            0x10 => 'm', // mounted
-            0x08 => 'A', // auth
-            0x04 => 't', // temporary
-            _ => ' ',    // regular file
-        };
+        let mut chars = String::new();
 
-        write!(f, "{:016x} {} {}", self.path, self.version, type_char)
+        let flagset = self.qtype;
+        if flagset.contains(QidType::Dir) {
+            chars.push('d');
+        }
+        if flagset.contains(QidType::Append) {
+            chars.push('a');
+        }
+        if flagset.contains(QidType::Exclusive) {
+            chars.push('l');
+        }
+        if flagset.contains(QidType::Mount) {
+            chars.push('m');
+        }
+        if flagset.contains(QidType::Auth) {
+            chars.push('A');
+        }
+        if flagset.contains(QidType::Tmp) {
+            chars.push('t');
+        }
+
+        // If no flags are set, show a space for regular file
+        if chars.is_empty() {
+            chars.push(' ');
+        }
+        write!(f, "{:016x} {} {chars}", self.path, self.version)
     }
 }
 
@@ -394,7 +412,7 @@ impl fmt::Display for Stat {
 
         let qid_str = if Stat::is_dont_touch_u32(self.qid.version)
             && Stat::is_dont_touch_u64(self.qid.path)
-            && self.qid.qtype == 0xFF
+            && self.qid.qtype == QidType::DontTouch
         {
             "(ffffffffffffffff 18446744073709551615 dalmA)".to_string()
         } else {

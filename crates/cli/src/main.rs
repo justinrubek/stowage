@@ -9,8 +9,8 @@ use futures::{SinkExt, StreamExt};
 use std::{io::Cursor, path::PathBuf, sync::Arc};
 use stowage_filesystems::disk::Handler;
 use stowage_proto::{
-    consts::P9_NOFID, Decodable, Message, MessageCodec, Stat, TaggedMessage, Tattach, Tauth,
-    Tclunk, Tcreate, Topen, Tread, Tstat, Tversion, Twalk, Twrite, Twstat,
+    consts::P9_NOFID, Decodable, Message, MessageCodec, QidType, Stat, TaggedMessage, Tattach,
+    Tauth, Tclunk, Tcreate, Topen, Tread, Tstat, Tversion, Twalk, Twrite, Twstat,
 };
 use stowage_service::Plan9;
 use tokio::net::{TcpListener, TcpStream};
@@ -1046,7 +1046,7 @@ async fn cat_command(conn: &mut Connection, tag: u16, path: String, msize: u32) 
     let response = receive_message(conn).await?;
     match response.message {
         Message::Ropen(ropen) => {
-            if ropen.qid.qtype & 0x80 != 0 {
+            if ropen.qid.qtype.contains(QidType::Dir) {
                 return Err(Error::Other(format!("cat: {path}: Is a directory")));
             }
         }
