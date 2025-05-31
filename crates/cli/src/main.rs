@@ -382,7 +382,7 @@ async fn read_directory_contents(
                             data_slice = &data_slice[stat_size + 2..];
                         }
                         Err(e) => {
-                            eprintln!("Warning: Failed to parse stat: {e}");
+                            eprintln!("failed to parse stat: {e}");
                             break;
                         }
                     }

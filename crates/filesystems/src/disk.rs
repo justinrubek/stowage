@@ -1,4 +1,3 @@
-use flagset::FlagSet;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -6,9 +5,9 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use stowage_proto::{
-    FileMode, Message, OpenMode, Qid, QidType, Rattach, Rclunk, Rcreate, Rerror, Rflush, Ropen,
-    Rread, Rremove, Rstat, Rwalk, Rwrite, Rwstat, Stat, Tattach, Tclunk, Tcreate, Tflush, Topen,
-    Tread, Tremove, Tstat, Twalk, Twrite, Twstat,
+    Encodable, FileMode, Message, OpenMode, Qid, QidType, Rattach, Rclunk, Rcreate, Rerror, Rflush,
+    Ropen, Rread, Rremove, Rstat, Rwalk, Rwrite, Rwstat, Stat, Tattach, Tclunk, Tcreate, Tflush,
+    Topen, Tread, Tremove, Tstat, Twalk, Twrite, Twstat,
 };
 use stowage_service::MessageHandler;
 
@@ -379,7 +378,7 @@ impl MessageHandler for Handler {
 
         // handle different types of reads
         if entry.is_dir {
-            // For directories, we need to read directory entries
+            // for directories, we need to read directory entries
             // and format them as stat structures
 
             let path = entry.path.clone();
@@ -389,32 +388,25 @@ impl MessageHandler for Handler {
 
             match fs::read_dir(&path) {
                 Ok(read_dir) => {
-                    // Skip entries before offset
+                    // skip entries before offset
                     let entries: Vec<_> = read_dir.collect();
                     let entries_to_process = entries
                         .into_iter()
                         .skip(usize::try_from(offset).unwrap())
-                        .take(count as usize / 128); // Rough estimate of stat size
+                        .take(count as usize / 128); // rough estimate of stat size
 
+                    // create a stat for each entry
                     for dir_entry in entries_to_process.flatten() {
                         if let Ok(metadata) = dir_entry.metadata() {
-                            // Create a stat for each entry
-                            let _stat = match stat_from_metadata(&metadata, &dir_entry.path()) {
-                                Ok(stat) => stat,
+                            let stat = stat_from_metadata(&metadata, &dir_entry.path());
+                            match stat.encode(&mut data) {
+                                Ok(_) => {}
                                 Err(e) => {
                                     return Message::Rerror(Rerror {
-                                        ename: format!("failed to build stat: {e}"),
+                                        ename: format!("failed to encode stat: {e}"),
                                     })
                                 }
-                            };
-
-                            // Encode the stat structure to bytes
-                            // This is simplified - you would need proper encoding logic here
-                            // to serialize the stat structure
-
-                            // For this example, we'll just append some placeholder data
-                            // In a real implementation, you would encode each stat structure
-                            data.extend_from_slice(&[0; 128]); // Placeholder
+                            }
                         }
                     }
 
@@ -556,14 +548,7 @@ impl MessageHandler for Handler {
 
         match fs::metadata(&path) {
             Ok(metadata) => {
-                let stat = match stat_from_metadata(&metadata, &path) {
-                    Ok(stat) => stat,
-                    Err(e) => {
-                        return Message::Rerror(Rerror {
-                            ename: format!("failed to build stat: {e}"),
-                        })
-                    }
-                };
+                let stat = stat_from_metadata(&metadata, &path);
                 Message::Rstat(Rstat { stat })
             }
             Err(e) => Message::Rerror(Rerror {
@@ -654,14 +639,15 @@ fn create_qid_from_metadata(metadata: &fs::Metadata) -> Qid {
     }
 }
 
-fn stat_from_metadata(metadata: &fs::Metadata, path: &Path) -> stowage_proto::error::Result<Stat> {
+fn stat_from_metadata(metadata: &fs::Metadata, path: &Path) -> Stat {
     let qid = create_qid_from_metadata(metadata);
+    let mode = FileMode::from_unix_perm(metadata.mode(), metadata.is_dir());
 
-    Ok(Stat {
+    Stat {
         r#type: u16::from(qid.qtype.bits()),
         dev: 0, // not needed for this implementation
         qid,
-        mode: FlagSet::<FileMode>::new(metadata.mode())?,
+        mode,
         atime: u32::try_from(metadata.atime()).unwrap(),
         mtime: u32::try_from(metadata.mtime()).unwrap(),
         length: metadata.len(),
@@ -673,5 +659,5 @@ fn stat_from_metadata(metadata: &fs::Metadata, path: &Path) -> stowage_proto::er
         uid: metadata.uid().to_string(),
         gid: metadata.gid().to_string(),
         muid: String::new(), // not tracked in this implementation
-    })
+    }
 }
